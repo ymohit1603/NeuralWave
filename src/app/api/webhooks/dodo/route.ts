@@ -68,23 +68,55 @@ export async function POST(request: NextRequest) {
 
     // Handle different webhook events
     switch (webhookData.event) {
-      case 'payment.completed':
       case 'payment.succeeded':
-      case 'subscription.created':
+      case 'subscription.active':
+      case 'subscription.renewed':
         await handlePaymentSuccess(webhookData.data);
         break;
 
       case 'payment.failed':
+      case 'subscription.failed':
         await handlePaymentFailed(webhookData.data);
         break;
 
+      case 'payment.cancelled':
       case 'subscription.cancelled':
       case 'subscription.expired':
         await handleSubscriptionCancelled(webhookData.data);
         break;
 
-      case 'refund.completed':
+      case 'refund.succeeded':
         await handleRefund(webhookData.data);
+        break;
+
+      case 'refund.failed':
+        console.log('Refund failed:', webhookData.data.payment_id);
+        break;
+
+      case 'subscription.on_hold':
+        await handleSubscriptionOnHold(webhookData.data);
+        break;
+
+      case 'subscription.plan_changed':
+        await handleSubscriptionPlanChanged(webhookData.data);
+        break;
+
+      case 'payment.processing':
+        console.log('Payment processing:', webhookData.data.payment_id);
+        break;
+
+      case 'license_key.created':
+        console.log('License key created:', webhookData.data);
+        break;
+
+      case 'dispute.opened':
+      case 'dispute.challenged':
+      case 'dispute.accepted':
+      case 'dispute.cancelled':
+      case 'dispute.expired':
+      case 'dispute.won':
+      case 'dispute.lost':
+        console.log('Dispute event:', webhookData.event, webhookData.data);
         break;
 
       default:
@@ -224,6 +256,75 @@ async function handleRefund(data: DodoWebhookPayload['data']) {
     .eq('dodo_payment_id', payment_id);
 
   console.log('Processed refund for payment:', payment_id);
+}
+
+async function handleSubscriptionOnHold(data: DodoWebhookPayload['data']) {
+  const { client_reference_id, payment_id } = data;
+
+  if (client_reference_id) {
+    await supabaseAdmin
+      .from('subscriptions')
+      .update({ status: 'on_hold', updated_at: new Date().toISOString() })
+      .eq('user_id', client_reference_id)
+      .eq('status', 'active');
+
+    console.log('Put subscription on hold for user:', client_reference_id);
+  } else if (payment_id) {
+    await supabaseAdmin
+      .from('subscriptions')
+      .update({ status: 'on_hold', updated_at: new Date().toISOString() })
+      .eq('dodo_payment_id', payment_id);
+
+    console.log('Put subscription on hold for payment:', payment_id);
+  }
+}
+
+async function handleSubscriptionPlanChanged(data: DodoWebhookPayload['data']) {
+  const { product_id, client_reference_id, payment_id } = data;
+
+  // Get new plan type from product ID
+  const planType = PRODUCT_TO_PLAN[product_id];
+  if (!planType) {
+    console.error('Unknown product ID:', product_id);
+    return;
+  }
+
+  // Calculate new expiration date
+  const now = new Date();
+  let expiresAt: Date | null = null;
+
+  if (planType === 'weekly') {
+    expiresAt = new Date(now);
+    expiresAt.setDate(expiresAt.getDate() + 7);
+  } else if (planType === 'yearly') {
+    expiresAt = new Date(now);
+    expiresAt.setFullYear(expiresAt.getFullYear() + 1);
+  }
+
+  if (client_reference_id) {
+    await supabaseAdmin
+      .from('subscriptions')
+      .update({
+        plan_type: planType,
+        expires_at: expiresAt?.toISOString() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('user_id', client_reference_id)
+      .eq('status', 'active');
+
+    console.log('Changed subscription plan for user:', client_reference_id, 'to:', planType);
+  } else if (payment_id) {
+    await supabaseAdmin
+      .from('subscriptions')
+      .update({
+        plan_type: planType,
+        expires_at: expiresAt?.toISOString() || null,
+        updated_at: new Date().toISOString(),
+      })
+      .eq('dodo_payment_id', payment_id);
+
+    console.log('Changed subscription plan for payment:', payment_id, 'to:', planType);
+  }
 }
 
 // Also handle GET for webhook verification (some providers require this)
