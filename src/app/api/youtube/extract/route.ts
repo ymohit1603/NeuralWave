@@ -5,8 +5,21 @@ import { exec } from 'child_process';
 import { promisify } from 'util';
 import fs from 'fs';
 import path from 'path';
+import os from 'os';
+
+export const runtime = 'nodejs';
+export const dynamic = 'force-dynamic';
+export const maxDuration = 60;
 
 const execAsync = promisify(exec);
+
+function getWritableTempDir(): string {
+  // Vercel/Lambda writable filesystem lives under /tmp.
+  const baseTmp = os.tmpdir();
+  const appTmp = path.join(baseTmp, 'neuralwave-temp');
+  fs.mkdirSync(appTmp, { recursive: true });
+  return appTmp;
+}
 
 interface VideoInfo {
   title: string;
@@ -162,6 +175,22 @@ async function downloadWithPlayDl(url: string, outputPath: string): Promise<void
   });
 }
 
+async function getOEmbedInfo(url: string): Promise<{ title?: string; author?: string } | null> {
+  try {
+    const response = await fetch(
+      `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`
+    );
+    if (!response.ok) return null;
+    const data = await response.json() as { title?: string; author_name?: string };
+    return {
+      title: data.title,
+      author: data.author_name,
+    };
+  } catch {
+    return null;
+  }
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -220,11 +249,11 @@ export async function POST(request: NextRequest) {
         thumbnail: videoDetails.thumbnails[videoDetails.thumbnails.length - 1]?.url || getThumbnailUrl(videoId, 'hq'),
       };
     } catch (infoError) {
-      console.error('[Server] Failed to get video info:', infoError);
-      // Use fallback info
+      console.warn('[Server] Video info from play-dl failed, using fallback metadata.');
+      const oembed = await getOEmbedInfo(url);
       videoInfo = {
-        title: 'YouTube Video',
-        author: 'Unknown',
+        title: oembed?.title || 'YouTube Video',
+        author: oembed?.author || 'Unknown',
         lengthSeconds: 0,
         audioUrl: '',
         videoId: videoId,
@@ -245,13 +274,10 @@ export async function POST(request: NextRequest) {
     if (shouldDownloadAudio) {
       console.log('[Server] Starting audio download...');
 
-      // Create temp directory if it doesn't exist
-      const tempDir = path.join(process.cwd(), 'temp');
-      if (!fs.existsSync(tempDir)) {
-        fs.mkdirSync(tempDir, { recursive: true });
-      }
-
-      const outputPath = path.join(tempDir, `${videoId}.opus`);
+      // Use writable temp storage (e.g. /tmp on Vercel)
+      const tempDir = getWritableTempDir();
+      const uniqueSuffix = `${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+      const outputPath = path.join(tempDir, `${videoId}_${uniqueSuffix}.opus`);
       let audioBuffer: Buffer | null = null;
       let audioFile: string | null = null;
 
