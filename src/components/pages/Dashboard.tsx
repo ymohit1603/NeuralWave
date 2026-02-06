@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { AudioUploader, SearchResult } from "@/components/dashboard/AudioUploader";
@@ -9,16 +9,18 @@ import { AuthModal } from "@/components/AuthModal";
 import { ErrorModal } from "@/components/ErrorModal";
 import { ProgressTracker } from "@/components/ProgressTracker";
 import { Confetti } from "@/components/Confetti";
+import { ProcessingOverlay } from "@/components/ProcessingOverlay";
 import { useUserPreferences } from "@/hooks/useUserPreferences";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSavedTracks } from "@/hooks/useSavedTracks";
 import { Brain, Sparkles, Music, TrendingUp, Play, Clock, ChevronRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { trackEvent } from "@/lib/analytics";
+import { posthogEvents } from "@/lib/posthog";
 import { performanceMonitor } from "@/lib/performance";
 import { extractYouTubeAudio } from "@/lib/youtubeExtractor";
 import { Button } from "@/components/ui/button";
-import { UserAudioSettings } from "@/lib/audio";
+import { UserAudioSettings, getInitialSettings } from "@/lib/audio";
 import Link from "next/link";
 
 type ProcessingState = "idle" | "processing" | "complete";
@@ -54,8 +56,8 @@ export default function Dashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { preferences, incrementConversions } = useUserPreferences();
-  const { canConvert, incrementFreeConversion, hasActiveSubscription } = useAuth();
-  const { addTrack, getTrack, getTrackAudioBuffer, getRecentTracks, updateTrackSettings } = useSavedTracks();
+  const { user, canConvert, incrementFreeConversion, hasActiveSubscription } = useAuth();
+  const { tracks, isLoading: isLoadingSavedTracks, addTrack, getTrack, getTrackAudioBuffer, getRecentTracks, updateTrackSettings } = useSavedTracks();
 
   const [processingState, setProcessingState] = useState<ProcessingState>("idle");
   const [currentFile, setCurrentFile] = useState<string | null>(null);
@@ -78,11 +80,19 @@ export default function Dashboard() {
   const [isLoadingTrack, setIsLoadingTrack] = useState(false);
   const [audioSource, setAudioSource] = useState<'upload' | 'youtube' | 'search'>('upload');
   const [youtubeProgress, setYoutubeProgress] = useState<{ stage: string; progress: number } | null>(null);
+  const [showProcessingOverlay, setShowProcessingOverlay] = useState(false);
+  const [hasSavedTrack, setHasSavedTrack] = useState(false);
   const { toast } = useToast();
+  const hasTrackedView = useRef(false);
+  const didAttemptRestoreRef = useRef(false);
 
   // Track page view
   useEffect(() => {
-    trackEvent.dashboardPageView();
+    if (!hasTrackedView.current) {
+      trackEvent.dashboardPageView();
+      posthogEvents.dashboardViewed();
+      hasTrackedView.current = true;
+    }
   }, []);
 
   // Prefetch dashboard routes for faster navigation
@@ -91,13 +101,55 @@ export default function Dashboard() {
     router.prefetch('/dashboard/upgrade');
   }, [router]);
 
-  // Handle loading a saved track from URL parameter
+  // Persist the last active track so returning to Home restores player state
   useEffect(() => {
-    const trackId = searchParams.get('track');
-    if (trackId && !isLoadingTrack) {
-      loadSavedTrack(trackId);
+    if (currentTrackId) {
+      sessionStorage.setItem('dashboard_continue_track', currentTrackId);
     }
-  }, [searchParams]);
+  }, [currentTrackId]);
+
+  // Handle loading a saved track from URL parameter or session
+  useEffect(() => {
+    if (isLoadingSavedTracks || isLoadingTrack) {
+      return;
+    }
+
+    const trackIdFromUrl = searchParams.get('track');
+    if (trackIdFromUrl) {
+      if (trackIdFromUrl !== currentTrackId) {
+        void loadSavedTrack(trackIdFromUrl);
+      }
+      return;
+    }
+
+    if (processingState !== 'idle' || audioBuffer || didAttemptRestoreRef.current) {
+      return;
+    }
+
+    const persistedTrackId = sessionStorage.getItem('dashboard_continue_track');
+    if (!persistedTrackId) {
+      didAttemptRestoreRef.current = true;
+      return;
+    }
+
+    const persistedTrack = tracks.find(track => track.id === persistedTrackId);
+    if (!persistedTrack) {
+      sessionStorage.removeItem('dashboard_continue_track');
+      didAttemptRestoreRef.current = true;
+      return;
+    }
+
+    // Only restore relatively recent sessions to avoid surprising stale loads.
+    const processedDate = new Date(persistedTrack.processedDate);
+    const minutesAgo = (Date.now() - processedDate.getTime()) / (1000 * 60);
+    if (minutesAgo > 30) {
+      didAttemptRestoreRef.current = true;
+      return;
+    }
+
+    didAttemptRestoreRef.current = true;
+    void loadSavedTrack(persistedTrackId);
+  }, [searchParams, currentTrackId, processingState, audioBuffer, isLoadingTrack, isLoadingSavedTracks, tracks]);
 
   const loadSavedTrack = async (trackId: string) => {
     setIsLoadingTrack(true);
@@ -132,6 +184,7 @@ export default function Dashboard() {
       setYoutubeThumbnail(track.thumbnail || null);
       setYoutubeVideoInfo(track.author ? { title: track.title, author: track.author } : null);
       setProcessingState("complete");
+      setHasSavedTrack(true);
 
       toast({
         title: "Track loaded",
@@ -154,6 +207,7 @@ export default function Dashboard() {
     setCurrentFile(fileName);
     setCurrentTrackId(null); // New track, not a saved one
     setLoadedTrackSettings(null);
+    setHasSavedTrack(false);
 
     // Track file upload
     trackEvent.fileUploaded(buffer.length, buffer.duration);
@@ -161,29 +215,7 @@ export default function Dashboard() {
     console.log("Audio ready:", fileName, "Duration:", buffer.duration, "seconds");
   };
 
-  // Check if user can convert - returns true if allowed, false if blocked
-  const checkCanConvert = (): boolean => {
-    // If user has active subscription, always allow
-    if (hasActiveSubscription) {
-      return true;
-    }
-
-    // If user can still convert (hasn't used free conversion)
-    if (canConvert) {
-      return true;
-    }
-
-    // User has used their free conversion - show paywall and redirect to upgrade
-    router.push('/dashboard/upgrade');
-    return false;
-  };
-
   const handleProcessStart = () => {
-    // Check if user can convert BEFORE starting
-    if (!checkCanConvert()) {
-      return;
-    }
-
     // Track processing start
     if (currentFile) {
       trackEvent.processingStarted(currentFile);
@@ -196,21 +228,33 @@ export default function Dashboard() {
   const handleFileSelect = (file: File) => {
     setCurrentFile(file.name);
     setAudioSource('upload');
+    // Track service usage
+    posthogEvents.serviceUsed('upload', { fileName: file.name, fileSize: file.size });
     // Processing state will be set by auto-processing in AudioUploader
   };
 
   const handleUrlSubmit = async (url: string) => {
-    // Check if user can convert BEFORE starting extraction
-    if (!checkCanConvert()) {
+    // For YouTube extraction, allow guests and users with free conversions
+    // Block only users who have used their free conversion and don't have subscription
+    if (user && !hasActiveSubscription && !canConvert) {
+      router.push('/dashboard/upgrade');
+      toast({
+        title: "Free Conversion Used",
+        description: "Upgrade to Pro for unlimited conversions.",
+      });
       return;
     }
 
     setIsLoadingYouTube(true);
+    setShowProcessingOverlay(true);
     setYoutubeThumbnail(null);
     setYoutubeVideoInfo(null);
     setYoutubeUrl(url);
     setAudioSource('youtube');
     setYoutubeProgress({ stage: 'Starting...', progress: 0 });
+
+    // Track service usage
+    posthogEvents.serviceUsed('youtube', { url });
 
     try {
       const { audioBuffer, videoInfo } = await extractYouTubeAudio(
@@ -229,16 +273,18 @@ export default function Dashboard() {
       setYoutubeVideoInfo({ title: videoInfo.title, author: videoInfo.author });
       setCurrentTrackId(null);
       setLoadedTrackSettings(null);
+      setHasSavedTrack(false);
 
       // Track the upload
       trackEvent.fileUploaded(audioBuffer.length, audioBuffer.duration);
+      posthogEvents.conversionStarted('youtube');
 
       toast({
         title: "YouTube audio extracted!",
         description: `Processing: ${videoInfo.title}`,
       });
 
-      // Start processing - conversion check already done above
+      // Start processing
       trackEvent.processingStarted(videoInfo.title);
       performanceMonitor.startTimer('audio_processing');
       setProcessingState("processing");
@@ -269,6 +315,7 @@ export default function Dashboard() {
       setShowErrorModal(true);
     } finally {
       setIsLoadingYouTube(false);
+      setShowProcessingOverlay(false);
       setYoutubeProgress(null);
     }
   };
@@ -314,12 +361,14 @@ export default function Dashboard() {
 
   const handleSearchResultSelect = (result: SearchResult) => {
     setAudioSource('search');
+    // Track service usage
+    posthogEvents.serviceUsed('search', { videoId: result.videoId, title: result.title });
     // Convert search result to YouTube URL and trigger extraction
     const youtubeUrl = `https://www.youtube.com/watch?v=${result.videoId}`;
     handleUrlSubmit(youtubeUrl);
   };
 
-  const handleProcessingComplete = async () => {
+  const handleProcessingComplete = async (processedBuffer: AudioBuffer) => {
     setProcessingState("complete");
     const isFirstConversion = preferences.conversions === 0;
 
@@ -329,14 +378,62 @@ export default function Dashboard() {
     // Track completion
     if (audioBuffer && processingTime) {
       trackEvent.processingCompleted(audioBuffer.duration, processingTime);
+      posthogEvents.conversionCompleted(audioSource, audioBuffer.duration);
     }
 
     incrementConversions();
     trackEvent.conversionCompleted(preferences.conversions + 1);
 
-    // Increment free conversion if not subscribed
-    if (!hasActiveSubscription) {
-      incrementFreeConversion();
+    // Increment free conversion if not subscribed (mark as used immediately)
+    if (user && !hasActiveSubscription && canConvert) {
+      await incrementFreeConversion();
+      toast({
+        title: "Free Conversion Used",
+        description: "You've used your 1 free conversion. Next track requires Pro!",
+      });
+    }
+
+    // Save the processed track automatically (only if not already saved)
+    if (processedBuffer && currentFile && !currentTrackId && !hasSavedTrack) {
+      try {
+        // Check if this exact track was just saved (within last 10 seconds)
+        const recentTracks = getRecentTracks(5);
+        const trackTitle = youtubeVideoInfo?.title || currentFile;
+        const justSaved = recentTracks.find(t => {
+          const savedDate = new Date(t.processedDate);
+          const now = new Date();
+          const secondsAgo = (now.getTime() - savedDate.getTime()) / 1000;
+          return t.title === trackTitle && secondsAgo < 10;
+        });
+
+        if (justSaved) {
+          // Track was just saved, use that ID
+          setCurrentTrackId(justSaved.id);
+          setHasSavedTrack(true);
+          return;
+        }
+
+        const result = await addTrack(
+          trackTitle,
+          processedBuffer, // Save the PROCESSED buffer, not the original
+          getInitialSettings(),
+          {
+            author: youtubeVideoInfo?.author,
+            thumbnail: youtubeThumbnail || undefined,
+            source: audioSource,
+            originalFileName: currentFile,
+          }
+        );
+
+        if (result.track) {
+          setCurrentTrackId(result.track.id);
+          setHasSavedTrack(true);
+          // Store track ID for potential continuation after navigation
+          sessionStorage.setItem('dashboard_continue_track', result.track.id);
+        }
+      } catch (error) {
+        console.error('Error saving track:', error);
+      }
     }
 
     // Show confetti on first conversion
@@ -353,8 +450,8 @@ export default function Dashboard() {
   };
 
   // Save track when settings change (called from AudioProcessor)
-  const handleSaveTrack = async (settings: UserAudioSettings) => {
-    if (!audioBuffer || !currentFile) return;
+  const handleSaveTrack = async (settings: UserAudioSettings, processedBuffer: AudioBuffer) => {
+    if (!processedBuffer || !currentFile) return;
 
     try {
       // If this is an existing track, update its settings
@@ -363,10 +460,11 @@ export default function Dashboard() {
         return;
       }
 
-      // Save new track
+      // This shouldn't happen since we auto-save in handleProcessingComplete
+      // But keep it as a fallback
       const result = await addTrack(
         youtubeVideoInfo?.title || currentFile,
-        audioBuffer,
+        processedBuffer,
         settings,
         {
           author: youtubeVideoInfo?.author,
@@ -377,7 +475,6 @@ export default function Dashboard() {
       );
 
       if (result.error && !result.track) {
-        // Failed to save
         toast({
           title: "Could not save track",
           description: result.error,
@@ -388,27 +485,10 @@ export default function Dashboard() {
 
       if (result.track) {
         setCurrentTrackId(result.track.id);
-
-        if (result.warning) {
-          // Saved but with a warning (e.g., had to remove old tracks)
-          toast({
-            title: "Track saved",
-            description: result.warning,
-          });
-        } else {
-          toast({
-            title: "Track saved",
-            description: "Your track has been saved to My Music.",
-          });
-        }
+        setHasSavedTrack(true);
       }
     } catch (error) {
       console.error('Error saving track:', error);
-      toast({
-        title: "Error saving track",
-        description: "An unexpected error occurred. Please try again.",
-        variant: "destructive",
-      });
     }
   };
 
@@ -417,10 +497,15 @@ export default function Dashboard() {
     setCurrentFile(null);
     setCurrentTrackId(null);
     setLoadedTrackSettings(null);
+    setHasSavedTrack(false);
     setYoutubeThumbnail(null);
     setYoutubeVideoInfo(null);
+    setAudioBuffer(null);
+    didAttemptRestoreRef.current = true;
     // Clear URL parameter
     router.replace('/dashboard');
+    // Clear session storage
+    sessionStorage.removeItem('dashboard_continue_track');
   };
 
   const recentTracks = getRecentTracks(3);
@@ -625,6 +710,15 @@ export default function Dashboard() {
         message={errorDetails.message}
         details={errorDetails.details}
         onRetry={youtubeUrl ? () => handleUrlSubmit(youtubeUrl) : undefined}
+      />
+
+      {/* Processing Overlay */}
+      <ProcessingOverlay
+        isVisible={showProcessingOverlay}
+        progress={youtubeProgress?.progress || 0}
+        stage={youtubeProgress?.stage || 'Processing...'}
+        title={youtubeVideoInfo?.title || currentFile || undefined}
+        thumbnail={youtubeThumbnail || undefined}
       />
     </div>
   );

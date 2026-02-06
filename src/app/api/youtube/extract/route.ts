@@ -39,8 +39,127 @@ function getThumbnailUrl(videoId: string, quality: 'default' | 'hq' | 'mq' | 'sd
     'sd': 'sddefault',
     'maxres': 'maxresdefault',
   };
-  
+
   return `https://img.youtube.com/vi/${videoId}/${qualityMap[quality]}.jpg`;
+}
+
+// Retry helper with exponential backoff
+async function retryWithBackoff<T>(
+  fn: () => Promise<T>,
+  maxRetries: number = 3,
+  baseDelay: number = 1000
+): Promise<T> {
+  let lastError: Error | null = null;
+
+  for (let attempt = 0; attempt < maxRetries; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.log(`[Server] Attempt ${attempt + 1} failed, retrying in ${baseDelay * Math.pow(2, attempt)}ms...`);
+
+      if (attempt < maxRetries - 1) {
+        await new Promise(resolve => setTimeout(resolve, baseDelay * Math.pow(2, attempt)));
+      }
+    }
+  }
+
+  throw lastError;
+}
+
+// Try different yt-dlp configurations
+async function downloadWithYtDlp(url: string, outputPath: string, _videoId: string): Promise<void> {
+  // Different command configurations to try
+  const commands = [
+    // Method 1: Default with android client (most reliable)
+    `yt-dlp -x --audio-format mp3 --audio-quality 0 --no-playlist -o "${outputPath.replace('.opus', '.mp3')}" --extractor-args "youtube:player_client=android" "${url}"`,
+
+    // Method 2: iOS client
+    `yt-dlp -x --audio-format mp3 --audio-quality 0 --no-playlist -o "${outputPath.replace('.opus', '.mp3')}" --extractor-args "youtube:player_client=ios" "${url}"`,
+
+    // Method 3: Web client with cookies bypass
+    `yt-dlp -x --audio-format mp3 --audio-quality 0 --no-playlist -o "${outputPath.replace('.opus', '.mp3')}" --extractor-args "youtube:player_client=web" --no-check-certificates "${url}"`,
+
+    // Method 4: MediaConnect client
+    `yt-dlp -x --audio-format mp3 --audio-quality 0 --no-playlist -o "${outputPath.replace('.opus', '.mp3')}" --extractor-args "youtube:player_client=mediaconnect" "${url}"`,
+
+    // Method 5: Best audio without format conversion
+    `yt-dlp -f "bestaudio[ext=m4a]/bestaudio" --no-playlist -o "${outputPath.replace('.opus', '.m4a')}" "${url}"`,
+  ];
+
+  let lastError: Error | null = null;
+
+  for (let i = 0; i < commands.length; i++) {
+    try {
+      console.log(`[Server] Trying download method ${i + 1}...`);
+      await execAsync(commands[i], { timeout: 120000 }); // 2 minute timeout
+
+      // Check which file was created
+      const possibleFiles = [
+        outputPath.replace('.opus', '.mp3'),
+        outputPath.replace('.opus', '.m4a'),
+        outputPath,
+      ];
+
+      for (const file of possibleFiles) {
+        if (fs.existsSync(file)) {
+          console.log(`[Server] ✓ Download successful with method ${i + 1}`);
+          // Rename to expected output path if different
+          if (file !== outputPath) {
+            fs.renameSync(file, outputPath.replace('.opus', path.extname(file)));
+          }
+          return;
+        }
+      }
+
+      throw new Error('Download completed but file not found');
+    } catch (error) {
+      lastError = error instanceof Error ? error : new Error(String(error));
+      console.log(`[Server] Method ${i + 1} failed:`, lastError.message.substring(0, 100));
+
+      // Clean up any partial files
+      const possibleFiles = [
+        outputPath.replace('.opus', '.mp3'),
+        outputPath.replace('.opus', '.m4a'),
+        outputPath,
+      ];
+      for (const file of possibleFiles) {
+        if (fs.existsSync(file)) {
+          try { fs.unlinkSync(file); } catch {}
+        }
+      }
+    }
+  }
+
+  throw new Error(`All download methods failed. Last error: ${lastError?.message || 'Unknown error'}`);
+}
+
+// Alternative: Use play-dl stream directly
+async function downloadWithPlayDl(url: string, outputPath: string): Promise<void> {
+  console.log('[Server] Trying play-dl stream method...');
+
+  const stream = await play.stream(url, { quality: 2 }); // quality 2 = highest
+
+  return new Promise((resolve, reject) => {
+    const writeStream = fs.createWriteStream(outputPath.replace('.opus', '.webm'));
+
+    stream.stream.pipe(writeStream);
+
+    writeStream.on('finish', () => {
+      console.log('[Server] ✓ play-dl stream download complete');
+      resolve();
+    });
+
+    writeStream.on('error', (error) => {
+      reject(error);
+    });
+
+    // Timeout after 2 minutes
+    setTimeout(() => {
+      writeStream.destroy();
+      reject(new Error('Download timeout'));
+    }, 120000);
+  });
 }
 
 export async function POST(request: NextRequest) {
@@ -61,10 +180,10 @@ export async function POST(request: NextRequest) {
     }
 
     const videoId = extractVideoId(url);
-    
+
     if (!videoId) {
       return NextResponse.json(
-        { error: 'Invalid YouTube URL' },
+        { error: 'Invalid YouTube URL. Please use a valid YouTube link.' },
         { status: 400 }
       );
     }
@@ -75,24 +194,43 @@ export async function POST(request: NextRequest) {
     const isValid = play.yt_validate(url);
     if (isValid !== 'video') {
       return NextResponse.json(
-        { error: 'Invalid YouTube video URL' },
+        { error: 'Invalid YouTube video URL. Please provide a direct video link.' },
         { status: 400 }
       );
     }
 
-    // Get video info
-    console.log('[Server] Fetching video info with play-dl...');
-    const basicInfo = await play.video_basic_info(url);
-    
-    const videoDetails = basicInfo.video_details;
-    const videoInfo: VideoInfo = {
-      title: videoDetails.title || 'Unknown Title',
-      author: videoDetails.channel?.name || 'Unknown',
-      lengthSeconds: videoDetails.durationInSec || 0,
-      audioUrl: '', // Not needed with play-dl
-      videoId: videoId,
-      thumbnail: videoDetails.thumbnails[videoDetails.thumbnails.length - 1]?.url || getThumbnailUrl(videoId, 'hq'),
-    };
+    // Get video info with retry
+    console.log('[Server] Fetching video info...');
+    let videoInfo: VideoInfo;
+
+    try {
+      const basicInfo = await retryWithBackoff(
+        () => play.video_basic_info(url),
+        3,
+        1000
+      );
+
+      const videoDetails = basicInfo.video_details;
+      videoInfo = {
+        title: videoDetails.title || 'Unknown Title',
+        author: videoDetails.channel?.name || 'Unknown',
+        lengthSeconds: videoDetails.durationInSec || 0,
+        audioUrl: '',
+        videoId: videoId,
+        thumbnail: videoDetails.thumbnails[videoDetails.thumbnails.length - 1]?.url || getThumbnailUrl(videoId, 'hq'),
+      };
+    } catch (infoError) {
+      console.error('[Server] Failed to get video info:', infoError);
+      // Use fallback info
+      videoInfo = {
+        title: 'YouTube Video',
+        author: 'Unknown',
+        lengthSeconds: 0,
+        audioUrl: '',
+        videoId: videoId,
+        thumbnail: getThumbnailUrl(videoId, 'hq'),
+      };
+    }
 
     if (videoInfo.lengthSeconds > 1800) {
       return NextResponse.json(
@@ -105,50 +243,89 @@ export async function POST(request: NextRequest) {
 
     // If downloadAudio is true, download and return the audio directly
     if (shouldDownloadAudio) {
-      console.log('[Server] Downloading audio with yt-dlp...');
-      
-      try {
-        // Create temp directory if it doesn't exist
-        const tempDir = path.join(process.cwd(), 'temp');
-        if (!fs.existsSync(tempDir)) {
-          fs.mkdirSync(tempDir, { recursive: true });
-        }
+      console.log('[Server] Starting audio download...');
 
-        const outputPath = path.join(tempDir, `${videoId}.opus`);
-        
-        // Use yt-dlp to download audio with options to bypass restrictions
-        console.log('[Server] Running yt-dlp...');
-        const command = `yt-dlp -x --audio-format opus --no-playlist --extractor-args "youtube:player_client=web" -o "${outputPath}" "${url}"`;
-        
-        await execAsync(command);
-        
-        console.log('[Server] Audio downloaded successfully');
-        
-        // Read the file
-        const audioBuffer = fs.readFileSync(outputPath);
-        
-        // Clean up temp file
-        fs.unlinkSync(outputPath);
-        
-        console.log('[Server] ✓ Audio file size:', (audioBuffer.length / 1024 / 1024).toFixed(2), 'MB');
-        console.log('[Server] ========================================');
-
-        // Return audio with video info in headers
-        return new NextResponse(audioBuffer, {
-          headers: {
-            'Content-Type': 'audio/webm',
-            'Content-Length': audioBuffer.length.toString(),
-            'X-Video-Title': encodeURIComponent(videoInfo.title),
-            'X-Video-Author': encodeURIComponent(videoInfo.author),
-            'X-Video-Id': videoInfo.videoId,
-            'X-Video-Thumbnail': videoInfo.thumbnail,
-            'X-Video-Length': videoInfo.lengthSeconds.toString(),
-          },
-        });
-      } catch (downloadError) {
-        console.error('[Server] Audio download failed:', downloadError);
-        throw new Error(`Failed to download audio: ${downloadError instanceof Error ? downloadError.message : 'Unknown error'}`);
+      // Create temp directory if it doesn't exist
+      const tempDir = path.join(process.cwd(), 'temp');
+      if (!fs.existsSync(tempDir)) {
+        fs.mkdirSync(tempDir, { recursive: true });
       }
+
+      const outputPath = path.join(tempDir, `${videoId}.opus`);
+      let audioBuffer: Buffer | null = null;
+      let audioFile: string | null = null;
+
+      // Try yt-dlp first
+      try {
+        await downloadWithYtDlp(url, outputPath, videoId);
+
+        // Find the downloaded file
+        const possibleFiles = [
+          outputPath.replace('.opus', '.mp3'),
+          outputPath.replace('.opus', '.m4a'),
+          outputPath.replace('.opus', '.webm'),
+          outputPath,
+        ];
+
+        for (const file of possibleFiles) {
+          if (fs.existsSync(file)) {
+            audioFile = file;
+            audioBuffer = fs.readFileSync(file);
+            break;
+          }
+        }
+      } catch (ytdlpError) {
+        console.log('[Server] yt-dlp failed, trying play-dl...');
+
+        // Fallback to play-dl
+        try {
+          await downloadWithPlayDl(url, outputPath);
+
+          const webmPath = outputPath.replace('.opus', '.webm');
+          if (fs.existsSync(webmPath)) {
+            audioFile = webmPath;
+            audioBuffer = fs.readFileSync(webmPath);
+          }
+        } catch (playDlError) {
+          console.error('[Server] play-dl also failed:', playDlError);
+          throw new Error('Unable to download audio. This video may be restricted or unavailable. Please try a different video.');
+        }
+      }
+
+      if (!audioBuffer || !audioFile) {
+        throw new Error('Failed to download audio file. Please try again.');
+      }
+
+      console.log('[Server] ✓ Audio file size:', (audioBuffer.length / 1024 / 1024).toFixed(2), 'MB');
+
+      // Clean up temp file
+      try {
+        fs.unlinkSync(audioFile);
+      } catch {}
+
+      // Determine content type based on file extension
+      const ext = path.extname(audioFile).toLowerCase();
+      const contentTypes: Record<string, string> = {
+        '.mp3': 'audio/mpeg',
+        '.m4a': 'audio/mp4',
+        '.webm': 'audio/webm',
+        '.opus': 'audio/opus',
+      };
+
+      console.log('[Server] ========================================');
+
+      // Return audio with video info in headers
+      return new NextResponse(new Uint8Array(audioBuffer), {
+        headers: {
+          'Content-Type': contentTypes[ext] || 'audio/webm',
+          'Content-Length': audioBuffer.length.toString(),
+          'X-Video-Title': encodeURIComponent(videoInfo.title),
+          'X-Video-Author': encodeURIComponent(videoInfo.author),
+          'X-Video-Id': videoInfo.videoId,
+          'X-Video-Thumbnail': videoInfo.thumbnail,
+          'X-Video-Length': videoInfo.lengthSeconds.toString(),
+        },
+      });
     }
 
     // Otherwise just return video info
@@ -158,9 +335,24 @@ export async function POST(request: NextRequest) {
     console.error('[Server] ========================================');
     console.error('[Server] YouTube extraction error:', error);
     console.error('[Server] ========================================');
-    
+
+    // Provide user-friendly error messages
+    let errorMessage = 'Failed to extract video. Please try again.';
+
+    if (error instanceof Error) {
+      if (error.message.includes('restricted') || error.message.includes('unavailable')) {
+        errorMessage = 'This video is restricted or unavailable. Please try a different video.';
+      } else if (error.message.includes('too long')) {
+        errorMessage = 'Video is too long. Please use videos under 30 minutes.';
+      } else if (error.message.includes('Invalid')) {
+        errorMessage = error.message;
+      } else {
+        errorMessage = 'Unable to download this video. Please try a different one or try again later.';
+      }
+    }
+
     return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Failed to extract video information' },
+      { error: errorMessage },
       { status: 500 }
     );
   }

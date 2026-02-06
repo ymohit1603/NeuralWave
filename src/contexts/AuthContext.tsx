@@ -9,14 +9,14 @@ interface AuthContextType {
   session: Session | null;
   loading: boolean;
   signInWithGoogle: () => Promise<void>;
-  signInWithEmail: (email: string, password: string) => Promise<void>;
-  signUpWithEmail: (email: string, password: string) => Promise<void>;
+  signInWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
+  signUpWithEmail: (email: string, password: string) => Promise<{ success: boolean; error?: string }>;
   signOut: () => Promise<void>;
   hasActiveSubscription: boolean;
   subscriptionPlan: 'free' | 'weekly' | 'monthly' | 'yearly' | 'lifetime';
   freeConversionsUsed: number;
   canConvert: boolean;
-  incrementFreeConversion: () => void;
+  incrementFreeConversion: () => Promise<void>;
   checkSubscription: () => Promise<void>;
   authError: string | null;
 }
@@ -63,31 +63,95 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const canConvert = hasActiveSubscription || freeConversionsUsed < 1;
 
-  const incrementFreeConversion = () => {
-    if (!hasActiveSubscription && freeConversionsUsed < 1) {
-      const newCount = freeConversionsUsed + 1;
-      setFreeConversionsUsed(newCount);
-      // Store in localStorage with or without user
-      const storageKey = user ? `free_conversions_${user.id}` : 'free_conversions_guest';
-      localStorage.setItem(storageKey, newCount.toString());
+  const incrementFreeConversion = async () => {
+    // Free conversion is account-scoped; guest previews should not consume it.
+    if (hasActiveSubscription || !user) {
+      return;
+    }
+
+    const newCount = freeConversionsUsed + 1;
+    setFreeConversionsUsed(newCount);
+
+    // Store in database for signed-in users
+    try {
+      const { error } = await supabase
+        .from('user_profiles')
+        .upsert({
+          user_id: user.id,
+          email: user.email,
+          free_conversions_used: newCount,
+          updated_at: new Date().toISOString(),
+        }, {
+          onConflict: 'user_id'
+        });
+
+      if (error) {
+        console.error('Error updating free conversions:', error);
+        // Fallback to localStorage
+        localStorage.setItem(`free_conversions_${user.id}`, newCount.toString());
+      }
+    } catch (error) {
+      console.error('Error updating free conversions:', error);
+      // Fallback to localStorage
+      localStorage.setItem(`free_conversions_${user.id}`, newCount.toString());
     }
   };
 
   const checkSubscription = async () => {
-    // Load free conversions from localStorage (guest or user)
-    const guestConversions = localStorage.getItem('free_conversions_guest');
-    const userConversions = user ? localStorage.getItem(`free_conversions_${user.id}`) : null;
-    
-    if (userConversions) {
-      setFreeConversionsUsed(parseInt(userConversions, 10));
-    } else if (guestConversions && !user) {
-      setFreeConversionsUsed(parseInt(guestConversions, 10));
-    }
-
     if (!user) {
+      // Guest user previews are always allowed, but do not consume account conversions.
+      localStorage.removeItem('free_conversions_guest');
+      setFreeConversionsUsed(0);
       setHasActiveSubscription(false);
       setSubscriptionPlan('free');
       return;
+    }
+
+    // Signed-in user - load from database first, fallback to localStorage
+    try {
+      // Check for free conversions in database
+      const { data: profileData, error: profileError } = await supabase
+        .from('user_profiles')
+        .select('free_conversions_used')
+        .eq('user_id', user.id)
+        .single();
+
+      if (!profileError && profileData) {
+        setFreeConversionsUsed(profileData.free_conversions_used || 0);
+      } else {
+        // No profile yet - fallback to user-specific local cache only.
+        const userConversions = localStorage.getItem(`free_conversions_${user.id}`);
+
+        let conversionsUsed = 0;
+        if (userConversions) {
+          const parsed = parseInt(userConversions, 10);
+          conversionsUsed = Number.isFinite(parsed) ? parsed : 0;
+        }
+
+        setFreeConversionsUsed(conversionsUsed);
+
+        // Create profile in database
+        await supabase
+          .from('user_profiles')
+          .upsert({
+            user_id: user.id,
+            email: user.email,
+            free_conversions_used: conversionsUsed,
+          }, {
+            onConflict: 'user_id'
+          });
+      }
+    } catch (error) {
+      console.error('Error loading free conversions:', error);
+      // Fallback to localStorage
+      const userConversions = localStorage.getItem(`free_conversions_${user.id}`);
+
+      if (userConversions) {
+        const parsed = parseInt(userConversions, 10);
+        setFreeConversionsUsed(Number.isFinite(parsed) ? parsed : 0);
+      } else {
+        setFreeConversionsUsed(0);
+      }
     }
 
     try {
@@ -113,7 +177,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } else if (data.expires_at) {
         const expiresAt = new Date(data.expires_at);
         const now = new Date();
-        
+
         if (expiresAt > now) {
           setHasActiveSubscription(true);
           setSubscriptionPlan(data.plan_type);
@@ -123,7 +187,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             .from('subscriptions')
             .update({ status: 'expired' })
             .eq('id', data.id);
-          
+
           setHasActiveSubscription(false);
           setSubscriptionPlan('free');
         }
@@ -174,33 +238,113 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
-  const signInWithEmail = async (email: string, password: string) => {
+  const signInWithEmail = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setAuthError(null);
     const { error } = await supabase.auth.signInWithPassword({
       email,
       password,
     });
+
     if (error) {
-      const message = getAuthErrorMessage(error);
-      setAuthError(message);
-      throw new Error(message);
+      const message = error.message.toLowerCase();
+
+      // "Invalid login credentials" can mean either wrong password OR no account
+      // Try to create account - if it fails with "already exists", then password was wrong
+      if (message.includes('invalid login credentials') || message.includes('user not found')) {
+        const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
+          email,
+          password,
+          options: {
+            data: { email_confirmed: true },
+          },
+        });
+
+        if (signUpError) {
+          const signUpMsg = signUpError.message.toLowerCase();
+          // Account exists - so the original error was wrong password
+          if (signUpMsg.includes('already registered') || signUpMsg.includes('already exists') || signUpMsg.includes('user already')) {
+            const errMsg = 'Wrong password. Please try again.';
+            setAuthError(errMsg);
+            return { success: false, error: errMsg };
+          }
+          const errMsg = getAuthErrorMessage(signUpError);
+          setAuthError(errMsg);
+          return { success: false, error: errMsg };
+        }
+
+        // Account created successfully
+        if (signUpData.user && !signUpData.session) {
+          // Need to sign in after signup (email confirmation enabled in Supabase)
+          const { error: retryError } = await supabase.auth.signInWithPassword({
+            email,
+            password,
+          });
+          if (retryError) {
+            const errMsg = 'Account created! Please sign in.';
+            setAuthError(errMsg);
+            return { success: false, error: errMsg };
+          }
+        }
+        return { success: true }; // Account created and signed in
+      }
+
+      const errMsg = getAuthErrorMessage(error);
+      setAuthError(errMsg);
+      return { success: false, error: errMsg };
     }
+
+    return { success: true };
   };
 
-  const signUpWithEmail = async (email: string, password: string) => {
+  const signUpWithEmail = async (email: string, password: string): Promise<{ success: boolean; error?: string }> => {
     setAuthError(null);
-    const { error } = await supabase.auth.signUp({
+    const { data, error } = await supabase.auth.signUp({
       email,
       password,
       options: {
-        emailRedirectTo: `${window.location.origin}/dashboard`,
+        data: { email_confirmed: true },
       },
     });
+
     if (error) {
-      const message = getAuthErrorMessage(error);
-      setAuthError(message);
-      throw new Error(message);
+      const message = error.message.toLowerCase();
+
+      // Account already exists - try to sign in with provided password
+      if (message.includes('already registered') || message.includes('already exists') || message.includes('user already')) {
+        const { error: signInError } = await supabase.auth.signInWithPassword({
+          email,
+          password,
+        });
+
+        if (signInError) {
+          // Password doesn't match existing account
+          const errMsg = 'Wrong password. Please try again.';
+          setAuthError(errMsg);
+          return { success: false, error: errMsg };
+        }
+
+        return { success: true }; // Signed in to existing account
+      }
+
+      const errMsg = getAuthErrorMessage(error);
+      setAuthError(errMsg);
+      return { success: false, error: errMsg };
     }
+
+    // If signup succeeded but no session, try signing in
+    if (data.user && !data.session) {
+      const { error: signInError } = await supabase.auth.signInWithPassword({
+        email,
+        password,
+      });
+      if (signInError) {
+        const errMsg = 'Account created! Please sign in.';
+        setAuthError(errMsg);
+        return { success: false, error: errMsg };
+      }
+    }
+
+    return { success: true };
   };
 
   const signOut = async () => {

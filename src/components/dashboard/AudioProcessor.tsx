@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
-import { Brain, Sparkles, Download, Play, Pause, RotateCcw, X, Lock, Settings2 } from "lucide-react";
+import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2 } from "lucide-react";
 import { processAudio, exportAsWAV, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { useToast } from "@/hooks/use-toast";
 import { createPreviewWithFade, PREVIEW_DURATION } from "@/lib/audioPreview";
@@ -17,9 +17,9 @@ interface AudioProcessorProps {
   fileName: string;
   audioBuffer: AudioBuffer | null;
   userProfile: UserProfile;
-  onComplete: () => void;
+  onComplete: (processedBuffer: AudioBuffer) => void;
   onReset: () => void;
-  onSaveTrack?: (settings: UserAudioSettings) => Promise<void>;
+  onSaveTrack?: (settings: UserAudioSettings, processedBuffer: AudioBuffer) => Promise<void>;
   initialSettings?: UserAudioSettings | null;
   trackId?: string | null;
 }
@@ -41,7 +41,6 @@ export function AudioProcessor({
   const [isComplete, setIsComplete] = useState(false);
   const [processedBuffer, setProcessedBuffer] = useState<AudioBuffer | null>(null);
   const [isPlaying, setIsPlaying] = useState(false);
-  const [playMode, setPlayMode] = useState<"original" | "optimized">("optimized");
   const [error, setError] = useState<string | null>(null);
   const [currentTime, setCurrentTime] = useState(0);
   const [duration, setDuration] = useState(0);
@@ -50,42 +49,64 @@ export function AudioProcessor({
   const [useRealTimeEngine] = useState(true);
   const [hasSavedTrack, setHasSavedTrack] = useState(!!trackId);
 
-  const { user, hasActiveSubscription } = useAuth();
+  const { user, hasActiveSubscription, canConvert } = useAuth();
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const startTimeRef = useRef<number>(0);
   const animationFrameRef = useRef<number | null>(null);
+  const hasStartedProcessingRef = useRef(false);
+  const hasCompletedProcessingRef = useRef(false);
+  const isMountedRef = useRef(true);
+  const processingRunIdRef = useRef(0);
+
+  // Use refs for callback closures to always get current values
+  const userRef = useRef(user);
+  const subscriptionRef = useRef(hasActiveSubscription);
+  const canConvertRef = useRef(canConvert);
+  useEffect(() => {
+    userRef.current = user;
+    subscriptionRef.current = hasActiveSubscription;
+    canConvertRef.current = canConvert;
+  }, [user, hasActiveSubscription, canConvert]);
+
   const { toast } = useToast();
 
   // Real-time audio engine hook
   const audioEngine = useAudioEngine({
     onTimeUpdate: (time, dur) => {
-      if (useRealTimeEngine && playMode === "optimized") {
+      if (useRealTimeEngine) {
         setCurrentTime(time);
         setDuration(dur);
 
-        // Check preview limits
-        if (!user && time >= 30) {
+        // Check preview limits - use refs to get current values
+        const currentUser = userRef.current;
+        const currentSubscription = subscriptionRef.current;
+        const currentCanConvert = canConvertRef.current;
+
+        // Not signed in - 30s preview then auth modal
+        if (!currentUser && time >= 30) {
           audioEngine.pause();
           setShowAuthModal(true);
           toast({
             title: "Sign In to Continue Listening",
-            description: "Sign in to play the full track.",
+            description: "Sign in to get one free full track.",
           });
-        } else if (user && !hasActiveSubscription && time >= 30) {
+        }
+        // Signed in but no subscription AND no free conversions left - 30s preview then upgrade
+        else if (currentUser && !currentSubscription && !currentCanConvert && time >= 30) {
           audioEngine.pause();
-          // Redirect to upgrade page
           router.push('/dashboard/upgrade');
           toast({
             title: "30-Second Preview Complete",
             description: "Upgrade to Pro for unlimited full-length audio.",
           });
         }
+        // Signed in with free conversion available OR subscription - full access (no limit check)
       }
     },
     onStateChange: (state) => {
-      if (useRealTimeEngine && playMode === "optimized") {
+      if (useRealTimeEngine) {
         setIsPlaying(state === 'playing');
       }
     },
@@ -103,11 +124,21 @@ export function AudioProcessor({
 
   // Initialize audio context
   useEffect(() => {
+    isMountedRef.current = true;
+
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
 
     return () => {
+      isMountedRef.current = false;
+      processingRunIdRef.current += 1;
+      hasStartedProcessingRef.current = false;
+      hasCompletedProcessingRef.current = false;
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
       cleanup();
       audioEngine.engine?.dispose();
     };
@@ -122,25 +153,39 @@ export function AudioProcessor({
 
   // Apply initial settings when loading a saved track
   useEffect(() => {
-    if (initialSettings && audioEngine.engine) {
-      audioEngine.applySettings(initialSettings);
+    if (initialSettings && audioEngine.engine && audioEngine.isReady) {
+      // Validate settings before applying
+      if (typeof initialSettings.bassWarmth === 'number' &&
+        typeof initialSettings.clarity === 'number') {
+        audioEngine.applySettings(initialSettings);
+      }
     }
-  }, [initialSettings, audioEngine.engine]);
+  }, [initialSettings, audioEngine.engine, audioEngine.isReady]);
 
   // If we have a trackId, mark as already complete (loading saved track)
   useEffect(() => {
     if (trackId && audioBuffer && !isComplete && !isProcessing) {
       setIsComplete(true);
       setHasSavedTrack(true);
+      hasCompletedProcessingRef.current = true;
     }
   }, [trackId, audioBuffer]);
 
   // Start processing automatically
   useEffect(() => {
-    if (audioBuffer && !isProcessing && !isComplete && !processedBuffer) {
-      startProcessing();
+    if (!audioBuffer || trackId || hasStartedProcessingRef.current || isComplete || processedBuffer) {
+      return;
     }
-  }, [audioBuffer]);
+
+    hasStartedProcessingRef.current = true;
+    void startProcessing();
+
+    return () => {
+      // StrictMode invokes effect cleanup immediately in development.
+      // Reset this flag so the second setup can start a fresh run.
+      hasStartedProcessingRef.current = false;
+    };
+  }, [audioBuffer, trackId, isComplete, processedBuffer]);
 
   const cleanup = () => {
     if (sourceNodeRef.current) {
@@ -162,34 +207,38 @@ export function AudioProcessor({
   const startProcessing = async () => {
     if (!audioBuffer) return;
 
+    const runId = ++processingRunIdRef.current;
     setIsProcessing(true);
     setError(null);
-    abortControllerRef.current = new AbortController();
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
 
     try {
       const processed = await processAudio(
         audioBuffer,
         userProfile,
         (progressData) => {
+          if (!isMountedRef.current) return;
           setStage(progressData.stage);
           setProgress(progressData.progress);
         },
-        abortControllerRef.current.signal
+        controller.signal
       );
 
-      setProcessedBuffer(processed);
-      setIsComplete(true);
-      onComplete();
-
-      // Save the track to browser storage
-      if (onSaveTrack && !hasSavedTrack) {
-        try {
-          await onSaveTrack(audioEngine.settings);
-          setHasSavedTrack(true);
-        } catch (saveError) {
-          console.error('Error saving track:', saveError);
-        }
+      if (
+        !isMountedRef.current ||
+        processingRunIdRef.current !== runId ||
+        controller.signal.aborted ||
+        hasCompletedProcessingRef.current
+      ) {
+        return;
       }
+
+      hasCompletedProcessingRef.current = true;
+      setProcessedBuffer(processed);
+      setIsProcessing(false);
+      setIsComplete(true);
+      onComplete(processed);
 
       toast({
         title: "🧠 Neural Optimization Complete!",
@@ -197,8 +246,19 @@ export function AudioProcessor({
       });
 
     } catch (err) {
+      if (!isMountedRef.current) {
+        return;
+      }
+
       const errorMessage = (err as Error).message;
-      if (errorMessage.includes('cancelled')) {
+      const wasCancelled = controller.signal.aborted || errorMessage.includes('cancelled');
+
+      // Ignore stale/aborted runs (e.g. StrictMode cleanup pass).
+      if (processingRunIdRef.current !== runId) {
+        return;
+      }
+
+      if (wasCancelled) {
         setError('Processing cancelled');
         toast({
           title: "Processing cancelled",
@@ -213,19 +273,26 @@ export function AudioProcessor({
         });
       }
       setIsProcessing(false);
+    } finally {
+      if (processingRunIdRef.current === runId) {
+        abortControllerRef.current = null;
+      }
     }
   };
 
   const cancelProcessing = () => {
     if (abortControllerRef.current) {
+      processingRunIdRef.current += 1;
       abortControllerRef.current.abort();
+      abortControllerRef.current = null;
+      hasStartedProcessingRef.current = false;
       setIsProcessing(false);
     }
   };
 
   const togglePlayback = () => {
-    // Use real-time engine for optimized mode
-    if (useRealTimeEngine && playMode === "optimized" && audioBuffer) {
+    // Use real-time engine
+    if (useRealTimeEngine && audioBuffer) {
       if (audioEngine.isPlaying) {
         audioEngine.pause();
       } else {
@@ -237,10 +304,10 @@ export function AudioProcessor({
       return;
     }
 
-    // Legacy playback for original mode or when real-time engine is disabled
+    // Legacy playback (fallback)
     if (!audioContextRef.current) return;
 
-    const bufferToPlay = playMode === "optimized" ? processedBuffer : audioBuffer;
+    const bufferToPlay = processedBuffer;
     if (!bufferToPlay) return;
 
     if (isPlaying) {
@@ -251,7 +318,7 @@ export function AudioProcessor({
 
       // For non-subscribers (including non-signed users), use preview buffer
       let playBuffer = bufferToPlay;
-      if (!isSubscribed && playMode === "optimized") {
+      if (!isSubscribed) {
         playBuffer = createPreviewWithFade(bufferToPlay, PREVIEW_DURATION);
       }
 
@@ -276,8 +343,8 @@ export function AudioProcessor({
   };
 
   const seekTo = (time: number) => {
-    // Use real-time engine for optimized mode
-    if (useRealTimeEngine && playMode === "optimized") {
+    // Use real-time engine
+    if (useRealTimeEngine) {
       audioEngine.seek(time);
       return;
     }
@@ -296,11 +363,11 @@ export function AudioProcessor({
       setTimeout(() => {
         if (!audioContextRef.current) return;
 
-        const bufferToPlay = playMode === "optimized" ? processedBuffer : audioBuffer;
+        const bufferToPlay = processedBuffer;
         if (!bufferToPlay) return;
 
         let playBuffer = bufferToPlay;
-        if (!isSubscribed && playMode === "optimized") {
+        if (!isSubscribed) {
           playBuffer = createPreviewWithFade(bufferToPlay, PREVIEW_DURATION);
         }
 
@@ -335,24 +402,25 @@ export function AudioProcessor({
     const elapsed = audioContextRef.current.currentTime - startTimeRef.current;
     setCurrentTime(elapsed);
 
-    // Check if 30-second preview limit reached for non-signed users
-    if (!user && playMode === "optimized" && elapsed >= 30) {
-      cleanup();
+    // Use refs to get current values
+    const currentUser = userRef.current;
+    const currentSubscription = subscriptionRef.current;
+    const currentCanConvert = canConvertRef.current;
 
-      // Not signed in - show auth modal after 30-second preview
+    // Not signed in - 30s preview then auth modal
+    if (!currentUser && elapsed >= 30) {
+      cleanup();
       setShowAuthModal(true);
       toast({
         title: "Sign In to Continue Listening",
-        description: "Sign in to play the full track.",
+        description: "Sign in to get one free full track.",
       });
       return;
     }
 
-    // Check if user is signed in but not subscribed
-    if (user && !isSubscribed && playMode === "optimized" && elapsed >= 30) {
+    // Signed in but no subscription AND no free conversions left - 30s preview then upgrade
+    if (currentUser && !currentSubscription && !currentCanConvert && elapsed >= 30) {
       cleanup();
-
-      // Signed in but not subscribed - redirect to upgrade
       router.push('/dashboard/upgrade');
       toast({
         title: "30-Second Preview Complete",
@@ -360,6 +428,7 @@ export function AudioProcessor({
       });
       return;
     }
+    // Signed in with free conversion available OR subscription - full access (no limit check)
 
     animationFrameRef.current = requestAnimationFrame(updatePlaybackTime);
   };
@@ -407,12 +476,12 @@ export function AudioProcessor({
     audioEngine.updateParameter(param, value);
 
     // Auto-save settings for existing saved tracks (debounced via the engine)
-    if (hasSavedTrack && onSaveTrack) {
+    if (hasSavedTrack && onSaveTrack && processedBuffer) {
       // Get updated settings after the parameter change
       const updatedSettings = { ...audioEngine.settings, [param]: value };
-      onSaveTrack(updatedSettings).catch(console.error);
+      onSaveTrack(updatedSettings, processedBuffer).catch(console.error);
     }
-  }, [audioEngine, hasSavedTrack, onSaveTrack]);
+  }, [audioEngine, hasSavedTrack, onSaveTrack, processedBuffer]);
 
   const handleModeChange = useCallback((mode: EffectMode) => {
     audioEngine.setMode(mode);
@@ -425,7 +494,7 @@ export function AudioProcessor({
   return (
     <div className="w-full max-w-full space-y-4">
       {/* Audio Control Panel - shown ABOVE the player when controls are toggled */}
-      {isComplete && showControls && playMode === "optimized" && (
+      {isComplete && showControls && (
         <AudioControlPanel
           settings={audioEngine.settings}
           onSettingsChange={handleSettingsChange}
@@ -442,9 +511,8 @@ export function AudioProcessor({
       <div className="p-4 sm:p-6 md:p-8 rounded-2xl glass-card border border-primary/20 overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
-          <div className={`p-2 sm:p-3 rounded-xl bg-gradient-to-br from-primary to-accent flex-shrink-0 ${
-            isProcessing ? 'animate-neural-pulse' : ''
-          }`}>
+          <div className={`p-2 sm:p-3 rounded-xl bg-gradient-to-br from-primary to-accent flex-shrink-0 ${isProcessing ? 'animate-neural-pulse' : ''
+            }`}>
             <Brain className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
           </div>
           <div className="flex-1 min-w-0">
@@ -478,11 +546,10 @@ export function AudioProcessor({
           {waveBars.map((i) => (
             <div
               key={i}
-              className={`w-1 sm:w-1.5 rounded-full transition-all duration-150 ${
-                isComplete
-                  ? 'bg-gradient-to-t from-primary to-accent'
-                  : 'bg-primary/50'
-              }`}
+              className={`w-1 sm:w-1.5 rounded-full transition-all duration-150 ${isComplete
+                ? 'bg-gradient-to-t from-primary to-accent'
+                : 'bg-primary/50'
+                }`}
               style={{
                 height: isComplete
                   ? `${30 + Math.sin(i * 0.5) * 20 + Math.random() * 30}%`
@@ -518,9 +585,8 @@ export function AudioProcessor({
           </div>
           <div className="h-2 bg-secondary rounded-full overflow-hidden">
             <div
-              className={`h-full transition-all duration-300 rounded-full ${
-                error ? 'bg-destructive' : 'bg-gradient-to-r from-primary via-neural-purple to-accent'
-              }`}
+              className={`h-full transition-all duration-300 rounded-full ${error ? 'bg-destructive' : 'bg-gradient-to-r from-primary via-neural-purple to-accent'
+                }`}
               style={{ width: `${progress}%` }}
             />
           </div>
@@ -554,46 +620,16 @@ export function AudioProcessor({
         {/* Completed state - Player controls */}
         {isComplete && (
           <div className="space-y-3 sm:space-y-4 animate-fade-in">
-            {/* Mode toggle */}
-            <div className="flex justify-center overflow-x-auto">
-              <div className="inline-flex p-1 rounded-xl bg-secondary/50 min-w-0">
-                <button
-                  onClick={() => {
-                    setPlayMode("original");
-                    if (isPlaying && useRealTimeEngine) {
-                      audioEngine.pause();
-                    }
-                  }}
-                  className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
-                    playMode === "original"
-                      ? "bg-card shadow-sm"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  Original
-                </button>
-                <button
-                  onClick={() => setPlayMode("optimized")}
-                  className={`px-3 sm:px-4 py-2 rounded-lg text-xs sm:text-sm font-medium transition-all whitespace-nowrap ${
-                    playMode === "optimized"
-                      ? "bg-gradient-to-r from-primary to-accent text-primary-foreground shadow-lg"
-                      : "text-muted-foreground hover:text-foreground"
-                  }`}
-                >
-                  <Sparkles className="w-3 h-3 sm:w-4 sm:h-4 inline mr-1" />
-                  Neural-Optimized
-                </button>
-              </div>
-            </div>
-
             {/* Preview notice for non-subscribers */}
-            {!isSubscribed && playMode === "optimized" && (
+            {!isSubscribed && (
               <div className="flex items-center justify-center gap-2 p-2 sm:p-3 rounded-xl bg-accent/10 border border-accent/20">
                 <Lock className="w-3 h-3 sm:w-4 sm:h-4 text-accent flex-shrink-0" />
                 <p className="text-xs sm:text-sm text-accent font-medium text-center">
                   {user
-                    ? "Preview: First 30 seconds • Subscribe for unlimited access"
-                    : "Free Preview: 30 seconds • Sign in to play full track"
+                    ? canConvert
+                      ? "Using your 1 free conversion • Next track requires Pro"
+                      : "Free conversion used • Subscribe for unlimited access"
+                    : "Free Preview: 30 seconds • Sign in for 1 free full track"
                   }
                 </p>
               </div>
@@ -688,8 +724,10 @@ export function AudioProcessor({
               {isSubscribed
                 ? 'Enjoy Your Premium Neural-Optimized Audio'
                 : user
-                  ? 'Upgrade to Pro for Unlimited Full-Length Audio'
-                  : 'Sign In After 30s Preview to Play Full Track'
+                  ? canConvert
+                    ? 'Enjoying Your Free Conversion • Upgrade for Unlimited Access'
+                    : 'Free Conversion Used • Upgrade to Pro for Unlimited Audio'
+                  : 'Sign In After 30s Preview for 1 Free Full Track'
               }
             </p>
           </div>
@@ -698,7 +736,18 @@ export function AudioProcessor({
         {/* Auth Modal */}
         <AuthModal
           open={showAuthModal}
-          onClose={() => setShowAuthModal(false)}
+          onClose={() => {
+            setShowAuthModal(false);
+            // If user just signed up and has free conversion available, resume playback
+            if (user && !hasActiveSubscription && canConvert) {
+              // Small delay to ensure auth state is updated
+              setTimeout(() => {
+                if (useRealTimeEngine) {
+                  audioEngine.play();
+                }
+              }, 500);
+            }
+          }}
           mode="signup"
           title="Sign In to Continue Listening"
           description="Sign in to play the full track and save your music."

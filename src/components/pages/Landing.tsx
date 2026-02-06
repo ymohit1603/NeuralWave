@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { Hero } from "@/components/landing/Hero";
@@ -8,50 +8,45 @@ import { BenefitCards } from "@/components/landing/BenefitCards";
 import { Testimonials } from "@/components/landing/Testimonials";
 import { HowItWorks } from "@/components/landing/HowItWorks";
 import { EmailCapture } from "@/components/landing/EmailCapture";
-import { OnboardingQuiz } from "@/components/OnboardingQuiz";
 import { AuthModal } from "@/components/AuthModal";
 import { useUserPreferences } from "@/hooks/useUserPreferences";
 import { useAuth } from "@/contexts/AuthContext";
 import { Button } from "@/components/ui/button";
 import { Brain, Headphones, ArrowRight } from "lucide-react";
+import { posthogEvents } from "@/lib/posthog";
 
 export default function Landing() {
   const router = useRouter();
-  const { updatePreferences, shouldShowQuiz } = useUserPreferences();
+  const { updatePreferences } = useUserPreferences();
   const { user } = useAuth();
-  const [showQuiz, setShowQuiz] = useState(false);
   const [showAuthModal, setShowAuthModal] = useState(false);
+  const pageLoadTime = useRef(Date.now());
+  const hasTrackedView = useRef(false);
 
   // Prefetch dashboard route for faster navigation
   useEffect(() => {
     router.prefetch('/dashboard');
   }, [router]);
 
-  // Auto-show quiz on first visit (after a delay)
+  // Track home page view
   useEffect(() => {
-    if (shouldShowQuiz) {
-      const timer = setTimeout(() => {
-        setShowQuiz(true);
-      }, 3000);
-      return () => clearTimeout(timer);
+    if (!hasTrackedView.current) {
+      posthogEvents.homeViewed();
+      hasTrackedView.current = true;
     }
-  }, [shouldShowQuiz]);
+
+    // Track bounce on unmount
+    return () => {
+      const timeOnPage = Math.floor((Date.now() - pageLoadTime.current) / 1000);
+      // Consider it a bounce if user leaves within 10 seconds without navigating to dashboard
+      if (timeOnPage < 10) {
+        posthogEvents.homeBounced(timeOnPage);
+      }
+    };
+  }, []);
 
   const handleActivate = () => {
-    // Go directly to dashboard without auth check
-    if (shouldShowQuiz) {
-      setShowQuiz(true);
-    } else {
-      router.push("/dashboard");
-    }
-  };
-
-  const handleQuizComplete = (answers: { goal: string; hasADHD: string; intensity: string }) => {
-    updatePreferences({
-      ...answers,
-      hasCompletedQuiz: true,
-    });
-    setShowQuiz(false);
+    // Go directly to dashboard
     router.push("/dashboard");
   };
 
@@ -133,13 +128,7 @@ export default function Landing() {
         </div>
       </footer>
 
-      {/* Modals */}
-      <OnboardingQuiz
-        open={showQuiz}
-        onComplete={handleQuizComplete}
-        onClose={() => setShowQuiz(false)}
-      />
-
+      {/* Auth Modal */}
       <AuthModal
         open={showAuthModal}
         onClose={() => setShowAuthModal(false)}

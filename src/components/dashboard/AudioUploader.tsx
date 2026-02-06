@@ -74,6 +74,13 @@ export function AudioUploader({
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const animationFrameRef = useRef<number | null>(null);
   const { toast } = useToast();
+  const youtubeProgressValue = Math.max(
+    0,
+    Math.min(100, typeof youtubeProgress?.progress === 'number' ? youtubeProgress.progress : 0)
+  );
+  const youtubeProgressLabel = Number.isInteger(youtubeProgressValue)
+    ? youtubeProgressValue.toString()
+    : youtubeProgressValue.toFixed(1);
 
   // Initialize AudioContext
   useEffect(() => {
@@ -414,9 +421,7 @@ export function AudioUploader({
                       {isLoadingYouTube && selectedSearchResult?.videoId === result.videoId && (
                         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 rounded-lg">
                           <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 text-white animate-spin mb-1" />
-                          <span className="text-[10px] text-white/80">
-                            {youtubeProgress?.progress ? `${youtubeProgress.progress}%` : 'Loading...'}
-                          </span>
+                          <span className="text-[10px] text-white/80">{youtubeProgressLabel}%</span>
                         </div>
                       )}
                     </div>
@@ -652,11 +657,11 @@ export function AudioUploader({
                     <div className="mt-3 h-2 bg-secondary rounded-full overflow-hidden">
                       <div
                         className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300 rounded-full"
-                        style={{ width: `${youtubeProgress?.progress || 10}%` }}
+                        style={{ width: `${youtubeProgressValue}%` }}
                       />
                     </div>
                     <p className="text-xs text-muted-foreground mt-1.5 text-right">
-                      {youtubeProgress?.progress || 0}%
+                      {youtubeProgressLabel}%
                     </p>
                   </div>
                 </div>

@@ -140,23 +140,35 @@ export function useAudioEngine(options: UseAudioEngineOptions = {}): UseAudioEng
 
   // Loading
   const loadFile = useCallback(async (file: File) => {
-    if (engineRef.current) {
-      await engineRef.current.loadFile(file);
-      setDuration(engineRef.current.getDuration());
-    }
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    await engine.loadFile(file);
+    if (engineRef.current !== engine) return;
+
+    setDuration(engine.getDuration());
   }, []);
 
   const loadUrl = useCallback(async (url: string) => {
-    if (engineRef.current) {
-      await engineRef.current.loadUrl(url);
-      setDuration(engineRef.current.getDuration());
-    }
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    await engine.loadUrl(url);
+    if (engineRef.current !== engine) return;
+
+    setDuration(engine.getDuration());
   }, []);
 
   const loadBuffer = useCallback(async (buffer: AudioBuffer) => {
-    if (engineRef.current) {
-      await engineRef.current.loadAudio(buffer);
-      setDuration(engineRef.current.getDuration());
+    const engine = engineRef.current;
+    if (!engine) return;
+
+    await engine.loadAudio(buffer);
+    if (engineRef.current !== engine) return;
+
+    const dur = engine.getDuration();
+    if (dur !== null && isFinite(dur)) {
+      setDuration(dur);
     }
   }, []);
 

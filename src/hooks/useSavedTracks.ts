@@ -1,26 +1,25 @@
 /**
- * Hook for managing saved/converted tracks in browser localStorage
- * Stores track metadata, audio data (as base64), and user settings
+ * Hook for managing saved/converted tracks using IndexedDB
+ * Uses IndexedDB instead of localStorage to handle larger audio files
  */
 
 import { useState, useEffect, useCallback } from 'react';
 import { UserAudioSettings } from '@/lib/audio';
+import {
+  getAllTracks,
+  saveTrack as saveTrackToDB,
+  deleteTrack as deleteTrackFromDB,
+  clearAllTracks as clearTracksFromDB,
+  updateTrack as updateTrackInDB,
+  migrateFromLocalStorage,
+  StoredTrack,
+} from '@/lib/indexedDB';
 
-export interface SavedTrack {
-  id: string;
-  title: string;
-  author?: string;
-  duration: number; // in seconds
-  thumbnail?: string;
-  processedDate: string; // ISO string
-  audioData: string; // base64 encoded audio
+export interface SavedTrack extends StoredTrack {
   settings: UserAudioSettings;
-  source: 'upload' | 'youtube' | 'search';
-  originalFileName?: string;
 }
 
-const STORAGE_KEY = 'neuralwave-saved-tracks';
-const MAX_TRACKS = 20; // Limit to prevent localStorage overflow
+const MAX_TRACKS = 50; // Increased limit since IndexedDB can handle more
 
 // Helper to generate unique ID
 function generateId(): string {
@@ -129,69 +128,24 @@ export function useSavedTracks() {
   const [tracks, setTracks] = useState<SavedTrack[]>([]);
   const [isLoading, setIsLoading] = useState(true);
 
-  // Load tracks from localStorage on mount
+  // Load tracks from IndexedDB on mount
   useEffect(() => {
-    try {
-      const stored = localStorage.getItem(STORAGE_KEY);
-      if (stored) {
-        const parsed = JSON.parse(stored);
-        // Sort by date, newest first
-        parsed.sort((a: SavedTrack, b: SavedTrack) =>
-          new Date(b.processedDate).getTime() - new Date(a.processedDate).getTime()
-        );
-        setTracks(parsed);
-      }
-    } catch (error) {
-      console.error('Error loading saved tracks:', error);
-    } finally {
-      setIsLoading(false);
-    }
-  }, []);
+    const loadTracks = async () => {
+      try {
+        // First, migrate from localStorage if needed (one-time)
+        await migrateFromLocalStorage();
 
-  // Save tracks to localStorage whenever they change
-  const saveTracks = useCallback((newTracks: SavedTrack[]): { success: boolean; error?: string } => {
-    try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(newTracks));
-      setTracks(newTracks);
-      return { success: true };
-    } catch (error) {
-      console.error('Error saving tracks:', error);
-      // If storage is full, try removing oldest tracks progressively
-      if (error instanceof DOMException && error.name === 'QuotaExceededError') {
-        // Try removing tracks one by one until it fits
-        let tracksToSave = [...newTracks];
-        while (tracksToSave.length > 1) {
-          tracksToSave = tracksToSave.slice(0, -1); // Remove oldest track
-          try {
-            localStorage.setItem(STORAGE_KEY, JSON.stringify(tracksToSave));
-            setTracks(tracksToSave);
-            return {
-              success: true,
-              error: `Storage full. Removed ${newTracks.length - tracksToSave.length} older track(s) to make room.`
-            };
-          } catch {
-            continue;
-          }
-        }
-        // If we still can't save even with 1 track, clear all and try again
-        try {
-          localStorage.removeItem(STORAGE_KEY);
-          const singleTrack = newTracks.slice(0, 1);
-          localStorage.setItem(STORAGE_KEY, JSON.stringify(singleTrack));
-          setTracks(singleTrack);
-          return {
-            success: true,
-            error: 'Storage was full. Cleared old tracks to save your new track.'
-          };
-        } catch {
-          return {
-            success: false,
-            error: 'Storage quota exceeded. Please clear some browser data or delete saved tracks.'
-          };
-        }
+        // Then load from IndexedDB
+        const storedTracks = await getAllTracks();
+        setTracks(storedTracks as SavedTrack[]);
+      } catch (error) {
+        console.error('Error loading saved tracks:', error);
+      } finally {
+        setIsLoading(false);
       }
-      return { success: false, error: 'Failed to save track. Please try again.' };
-    }
+    };
+
+    loadTracks();
   }, []);
 
   // Add a new track
@@ -222,33 +176,53 @@ export function useSavedTracks() {
         originalFileName: options?.originalFileName,
       };
 
-      const newTracks = [newTrack, ...tracks].slice(0, MAX_TRACKS);
-      const result = saveTracks(newTracks);
-
-      if (!result.success) {
-        return { track: null, error: result.error };
+      // Save to IndexedDB
+      const saved = await saveTrackToDB(newTrack);
+      if (!saved) {
+        return { track: null, error: 'Failed to save track. Please try again.' };
       }
 
-      return { track: newTrack, warning: result.error };
+      // Update state
+      const newTracks = [newTrack, ...tracks];
+
+      // If we exceed max tracks, remove oldest ones
+      if (newTracks.length > MAX_TRACKS) {
+        const tracksToRemove = newTracks.slice(MAX_TRACKS);
+        for (const track of tracksToRemove) {
+          await deleteTrackFromDB(track.id);
+        }
+        setTracks(newTracks.slice(0, MAX_TRACKS));
+        return {
+          track: newTrack,
+          warning: `Storage limit reached. Removed ${tracksToRemove.length} older track(s).`
+        };
+      }
+
+      setTracks(newTracks);
+      return { track: newTrack };
     } catch (error) {
       console.error('Error adding track:', error);
       return { track: null, error: 'Failed to process audio for saving.' };
     }
-  }, [tracks, saveTracks]);
+  }, [tracks]);
 
   // Update track settings
-  const updateTrackSettings = useCallback((trackId: string, settings: UserAudioSettings) => {
-    const newTracks = tracks.map(track =>
-      track.id === trackId ? { ...track, settings } : track
-    );
-    saveTracks(newTracks);
-  }, [tracks, saveTracks]);
+  const updateTrackSettings = useCallback(async (trackId: string, settings: UserAudioSettings) => {
+    const success = await updateTrackInDB(trackId, { settings });
+    if (success) {
+      setTracks(prev => prev.map(track =>
+        track.id === trackId ? { ...track, settings } : track
+      ));
+    }
+  }, []);
 
   // Delete a track
-  const deleteTrack = useCallback((trackId: string) => {
-    const newTracks = tracks.filter(track => track.id !== trackId);
-    saveTracks(newTracks);
-  }, [tracks, saveTracks]);
+  const deleteTrack = useCallback(async (trackId: string) => {
+    const success = await deleteTrackFromDB(trackId);
+    if (success) {
+      setTracks(prev => prev.filter(track => track.id !== trackId));
+    }
+  }, []);
 
   // Get a track by ID
   const getTrack = useCallback((trackId: string): SavedTrack | undefined => {
@@ -274,8 +248,8 @@ export function useSavedTracks() {
   }, [tracks]);
 
   // Clear all tracks
-  const clearAllTracks = useCallback(() => {
-    localStorage.removeItem(STORAGE_KEY);
+  const clearAllTracks = useCallback(async () => {
+    await clearTracksFromDB();
     setTracks([]);
   }, []);
 

@@ -443,45 +443,92 @@ export class AudioEngine {
   }
 
   /**
+   * Sanitize externally loaded settings (e.g. saved tracks from older schema versions).
+   */
+  private sanitizeSettings(settings: Partial<UserAudioSettings>): UserAudioSettings {
+    const effectModes: EffectMode[] = ['8d-spatial', 'bilateral', 'emdr', 'haas'];
+    const movementPatterns: MovementPattern[] = ['leftright', 'circular', 'figure8'];
+    const bilateralTypes: BilateralType[] = ['smooth', 'hard-cut'];
+    const leadEars: LeadEar[] = ['left', 'right'];
+
+    const mode = effectModes.includes(settings.mode as EffectMode)
+      ? settings.mode as EffectMode
+      : this.settings.mode;
+
+    const defaults = getDefaultSettings(mode);
+
+    const normalizeNumber = (value: unknown, fallback: number): number => {
+      const parsed = typeof value === 'number' ? value : Number(value);
+      if (!Number.isFinite(parsed)) return fallback;
+      return Math.max(0, Math.min(100, parsed));
+    };
+
+    return {
+      ...defaults,
+      mode,
+      bassWarmth: normalizeNumber(settings.bassWarmth, defaults.bassWarmth),
+      clarity: normalizeNumber(settings.clarity, defaults.clarity),
+      airBrightness: normalizeNumber(settings.airBrightness, defaults.airBrightness),
+      travelSpeed: normalizeNumber(settings.travelSpeed, defaults.travelSpeed),
+      effectIntensity: normalizeNumber(settings.effectIntensity, defaults.effectIntensity),
+      travelWidth: normalizeNumber(settings.travelWidth, defaults.travelWidth),
+      spatialDepth: normalizeNumber(settings.spatialDepth, defaults.spatialDepth),
+      movementPattern: movementPatterns.includes(settings.movementPattern as MovementPattern)
+        ? settings.movementPattern as MovementPattern
+        : defaults.movementPattern,
+      bilateralType: bilateralTypes.includes(settings.bilateralType as BilateralType)
+        ? settings.bilateralType as BilateralType
+        : defaults.bilateralType,
+      bilateralFrequency: normalizeNumber(settings.bilateralFrequency, defaults.bilateralFrequency),
+      haasDelay: normalizeNumber(settings.haasDelay, defaults.haasDelay),
+      leadEar: leadEars.includes(settings.leadEar as LeadEar)
+        ? settings.leadEar as LeadEar
+        : defaults.leadEar,
+      masterVolume: normalizeNumber(settings.masterVolume, defaults.masterVolume),
+    };
+  }
+
+  /**
    * Apply all settings
    */
-  applySettings(settings: UserAudioSettings, saveToHistory: boolean = false): void {
-    this.settings = { ...settings };
+  applySettings(settings: Partial<UserAudioSettings>, saveToHistory: boolean = false): void {
+    const normalizedSettings = this.sanitizeSettings(settings);
+    this.settings = normalizedSettings;
 
     // Apply EQ settings
-    this.proximityEffect?.setAmount(settings.bassWarmth);
-    this.presenceBoost?.setAmount(settings.clarity);
-    this.breathEnhancement?.setAmount(settings.airBrightness);
+    this.proximityEffect?.setAmount(normalizedSettings.bassWarmth);
+    this.presenceBoost?.setAmount(normalizedSettings.clarity);
+    this.breathEnhancement?.setAmount(normalizedSettings.airBrightness);
 
     // Apply spatial settings
-    this.trajectoryGenerator.setSpeed(settings.travelSpeed);
-    this.trajectoryGenerator.setWidth(settings.travelWidth);
-    this.trajectoryGenerator.setPattern(settings.movementPattern);
+    this.trajectoryGenerator.setSpeed(normalizedSettings.travelSpeed);
+    this.trajectoryGenerator.setWidth(normalizedSettings.travelWidth);
+    this.trajectoryGenerator.setPattern(normalizedSettings.movementPattern);
 
     // Apply reverb
-    this.spatialReverb?.setMix(settings.spatialDepth);
+    this.spatialReverb?.setMix(normalizedSettings.spatialDepth);
 
     // Apply bilateral settings
-    this.bilateralPanner?.setType(settings.bilateralType);
-    this.bilateralPanner?.setFrequency(settings.bilateralFrequency);
-    this.bilateralPanner?.setWidth(settings.travelWidth);
+    this.bilateralPanner?.setType(normalizedSettings.bilateralType);
+    this.bilateralPanner?.setFrequency(normalizedSettings.bilateralFrequency);
+    this.bilateralPanner?.setWidth(normalizedSettings.travelWidth);
 
     // Apply Haas settings
-    this.haasEffect?.setDelay(settings.haasDelay);
-    this.haasEffect?.setLeadEar(settings.leadEar);
+    this.haasEffect?.setDelay(normalizedSettings.haasDelay);
+    this.haasEffect?.setLeadEar(normalizedSettings.leadEar);
 
     // Apply master volume
     if (this.masterGain && this.context) {
-      const volume = mapParameterValue(settings.masterVolume, PARAMETER_MAPPINGS.masterVolume);
+      const volume = mapParameterValue(normalizedSettings.masterVolume, PARAMETER_MAPPINGS.masterVolume);
       this.masterGain.gain.setTargetAtTime(volume, this.context.currentTime, 0.05);
     }
 
     // Save to history if requested
     if (saveToHistory) {
-      this.history.push(settings);
+      this.history.push(normalizedSettings);
     }
 
-    this.events.onSettingsChange?.(settings);
+    this.events.onSettingsChange?.(normalizedSettings);
   }
 
   /**

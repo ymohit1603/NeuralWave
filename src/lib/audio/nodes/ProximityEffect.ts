@@ -44,14 +44,27 @@ export class ProximityEffect implements AudioProcessingNode {
    * @param transitionTime - Smooth transition time in seconds
    */
   setAmount(value: number, transitionTime: number = 0.05): void {
+    // Validate input value
+    if (typeof value !== 'number' || !isFinite(value)) {
+      value = 50; // Default to neutral
+    }
+
     const gainDb = mapParameterValue(value, PARAMETER_MAPPINGS.bassWarmth);
+
+    // Ensure the gain value is finite
+    if (!isFinite(gainDb)) {
+      console.warn('ProximityEffect: Invalid gain value, using default');
+      return;
+    }
+
     const currentTime = this.context.currentTime;
+    const safeTransitionTime = Math.max(0.001, transitionTime); // Ensure positive transition time
 
     this.lowShelfFilter.gain.cancelScheduledValues(currentTime);
     this.lowShelfFilter.gain.setTargetAtTime(
       gainDb,
       currentTime,
-      transitionTime
+      safeTransitionTime
     );
   }
 

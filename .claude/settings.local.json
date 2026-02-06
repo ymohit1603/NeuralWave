@@ -3,7 +3,8 @@
     "allow": [
       "Bash(npx tsc:*)",
       "Bash(npm run build)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "Bash(npm install:*)"
     ]
   }
 }

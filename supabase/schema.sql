@@ -33,6 +33,7 @@ CREATE TABLE IF NOT EXISTS public.user_profiles (
     email VARCHAR(255),
     full_name VARCHAR(255),
     avatar_url TEXT,
+    free_conversions_used INTEGER DEFAULT 0,
     created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
     updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
 );

@@ -1,9 +1,10 @@
-import { useState } from "react";
+import { useState, useEffect, useRef } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent } from "@/components/ui/dialog";
 import { Brain, Sparkles, Check, Loader2 } from "lucide-react";
 import { saveSubscription, calculateYearlySavings } from "@/lib/subscriptionManager";
 import { useToast } from "@/hooks/use-toast";
+import { posthogEvents } from "@/lib/posthog";
 
 interface PaywallModalProps {
   open: boolean;
@@ -25,6 +26,22 @@ export function PaywallModal({
   const [selectedPlan, setSelectedPlan] = useState<"weekly" | "yearly" | "lifetime">("yearly");
   const [isProcessing, setIsProcessing] = useState(false);
   const { toast } = useToast();
+  const openTimeRef = useRef<number>(0);
+
+  // Track paywall opened
+  useEffect(() => {
+    if (open) {
+      openTimeRef.current = Date.now();
+      posthogEvents.paywallOpened(mode, mode);
+    }
+  }, [open, mode]);
+
+  const handleClose = () => {
+    // Track paywall exited
+    const timeSpent = Math.floor((Date.now() - openTimeRef.current) / 1000);
+    posthogEvents.paywallExited(mode, selectedPlan, timeSpent);
+    onClose();
+  };
 
   const savings = calculateYearlySavings();
   const weeklyYearlyCost = 7.99 * 52;
@@ -134,9 +151,12 @@ export function PaywallModal({
   const handlePaymentSuccess = (paymentId: string, plan: 'weekly' | 'yearly' | 'lifetime') => {
     // Save subscription to localStorage
     saveSubscription(plan, paymentId);
-    
+
+    // Track purchase completed
+    posthogEvents.purchaseCompleted(plan, plans[plan].price, paymentId);
+
     setIsProcessing(false);
-    
+
     toast({
       title: "🎉 Subscription activated!",
       description: `You now have ${plan === 'lifetime' ? 'lifetime' : 'unlimited'} access to neural optimization.`,
@@ -144,7 +164,7 @@ export function PaywallModal({
 
     // Notify parent component
     onSubscribed?.();
-    
+
     // Close modal
     onClose();
   };
@@ -171,7 +191,7 @@ export function PaywallModal({
   const content = getModalContent();
 
   return (
-    <Dialog open={open} onOpenChange={onClose}>
+    <Dialog open={open} onOpenChange={handleClose}>
       <DialogContent className="sm:max-w-2xl max-h-[95vh] p-0 gap-0 bg-card border-primary/20 overflow-hidden flex flex-col" hideCloseButton ariaTitle={content.title}>
 
         {/* Header */}
@@ -318,7 +338,7 @@ export function PaywallModal({
 
             <Button
               variant="ghost"
-              onClick={onClose}
+              onClick={handleClose}
               className="w-full text-sm sm:text-base h-10 sm:h-auto text-muted-foreground"
               disabled={isProcessing}
             >
