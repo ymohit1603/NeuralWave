@@ -34,3 +34,10 @@ yarn-error.log*
 # typescript
 *.tsbuildinfo
 next-env.d.ts
+
+# audio files and temp directories
+/temp/
+/t/
+*.wav
+*.mp3
+*.m4a
