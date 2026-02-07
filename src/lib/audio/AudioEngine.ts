@@ -260,7 +260,7 @@ export class AudioEngine {
     }
 
     // Stop any existing playback
-    this.stopSource();
+    this.stopSource(true);
 
     // Create new source node
     this.sourceNode = this.context.createBufferSource();
@@ -309,7 +309,7 @@ export class AudioEngine {
     if (this.state !== 'playing' || !this.context) return;
 
     this.pauseTime = this.context.currentTime - this.startTime;
-    this.stopSource();
+    this.stopSource(true);
     this.setState('paused');
     this.stopTimeUpdate();
     this.trajectoryGenerator.stop();
@@ -320,7 +320,7 @@ export class AudioEngine {
    * Stop playback
    */
   stop(): void {
-    this.stopSource();
+    this.stopSource(true);
     this.pauseTime = 0;
     this.setState('ready');
     this.stopTimeUpdate();
@@ -336,7 +336,7 @@ export class AudioEngine {
     const wasPlaying = this.state === 'playing';
 
     // Stop current source
-    this.stopSource();
+    this.stopSource(true);
 
     // Update pause time
     this.pauseTime = clampedTime;
@@ -368,15 +368,21 @@ export class AudioEngine {
   /**
    * Stop the source node
    */
-  private stopSource(): void {
+  private stopSource(suppressOnEnded: boolean = false): void {
     if (this.sourceNode) {
+      const sourceNode = this.sourceNode;
+      this.sourceNode = null;
+
+      if (suppressOnEnded) {
+        sourceNode.onended = null;
+      }
+
       try {
-        this.sourceNode.stop();
+        sourceNode.stop();
       } catch (e) {
         // Ignore errors if already stopped
       }
-      this.sourceNode.disconnect();
-      this.sourceNode = null;
+      sourceNode.disconnect();
     }
   }
 
@@ -606,13 +612,12 @@ export class AudioEngine {
   setMode(mode: EffectMode): void {
     if (mode === this.settings.mode) return;
 
-    const wasPlaying = this.state === 'playing';
-    const currentTime = this.getCurrentTime();
+    const shouldRestartPlayback =
+      this.audioBuffer !== null &&
+      (this.state === 'playing' || this.state === 'paused' || this.state === 'ready');
 
-    // Stop current playback
-    if (wasPlaying) {
-      this.pause();
-    }
+    // Stop current playback and reset to a clean start point.
+    this.stop();
 
     // Stop current mode-specific processing
     this.trajectoryGenerator.stop();
@@ -638,10 +643,11 @@ export class AudioEngine {
     // Update history default settings
     this.history.setDefaultSettings(newModeDefaults);
 
-    // Resume playback if was playing
-    if (wasPlaying) {
-      this.pauseTime = currentTime;
-      this.play();
+    // Restart from 0 so mode differences are immediately audible.
+    if (shouldRestartPlayback) {
+      this.play(0);
+    } else {
+      this.events.onTimeUpdate?.(0, this.duration);
     }
   }
 
