@@ -11,8 +11,9 @@ export const maxDuration = 60;
 
 const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
-const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.webm', '.opus'] as const;
+const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.mp4', '.webm', '.opus'] as const;
 const ERROR_LOG_SNIPPET_LENGTH = 800;
+const YOUTUBEI_PLAYER_ENDPOINT = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const YT_DLP_BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 const YT_DLP_ASSET_CANDIDATES = (() => {
   if (process.platform === 'win32') {
@@ -44,6 +45,30 @@ type YtDlpRunner = (
 
 let ytDlpRunnerPromise: Promise<YtDlpRunner> | null = null;
 
+const YOUTUBEI_CLIENTS = [
+  {
+    label: 'android',
+    userAgent: 'com.google.android.youtube/20.10.35 (Linux; U; Android 14)',
+    client: {
+      clientName: 'ANDROID',
+      clientVersion: '20.10.35',
+      hl: 'en',
+      gl: 'US',
+      androidSdkVersion: 34,
+    },
+  },
+  {
+    label: 'ios',
+    userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3 like Mac OS X)',
+    client: {
+      clientName: 'IOS',
+      clientVersion: '20.10.4',
+      hl: 'en',
+      gl: 'US',
+    },
+  },
+] as const;
+
 interface VideoInfo {
   title: string;
   author: string;
@@ -65,6 +90,26 @@ interface StreamCandidate {
   protocol: string;
   abr: number;
   sourceStrategy: string;
+}
+
+interface YouTubeiFormat {
+  itag?: number;
+  url?: string;
+  mimeType?: string;
+  qualityLabel?: string;
+  contentLength?: string;
+  bitrate?: number;
+}
+
+interface YouTubeiPlayerResponse {
+  playabilityStatus?: {
+    status?: string;
+    reason?: string;
+  };
+  streamingData?: {
+    formats?: YouTubeiFormat[];
+    adaptiveFormats?: YouTubeiFormat[];
+  };
 }
 
 class ApiError extends Error {
@@ -474,6 +519,156 @@ function createCookiesFile(tempDir: string): { cookieFile: string | null; should
   }
 
   return { cookieFile: null, shouldCleanup: false };
+}
+
+function inferExtensionFromMimeType(mimeType: string | undefined): '.mp4' | '.webm' {
+  if (!mimeType) return '.mp4';
+  return mimeType.toLowerCase().includes('webm') ? '.webm' : '.mp4';
+}
+
+function parseContentLength(value: string | number | undefined): number {
+  if (typeof value === 'number' && Number.isFinite(value)) {
+    return value;
+  }
+
+  if (typeof value === 'string') {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) return parsed;
+  }
+
+  return 0;
+}
+
+function pickBestYouTubeiProgressiveFormat(formats: YouTubeiFormat[]): YouTubeiFormat | null {
+  const candidates = formats.filter((format) => {
+    if (!format.url || !format.mimeType) return false;
+    const mime = format.mimeType.toLowerCase();
+    return mime.includes('video/mp4') || mime.includes('audio/mp4') || mime.includes('video/webm');
+  });
+
+  if (candidates.length === 0) return null;
+
+  return candidates.sort((a, b) => {
+    const aSize = parseContentLength(a.contentLength);
+    const bSize = parseContentLength(b.contentLength);
+
+    if (aSize > 0 && bSize > 0) return aSize - bSize;
+    if (aSize > 0) return -1;
+    if (bSize > 0) return 1;
+
+    const aBitrate = typeof a.bitrate === 'number' ? a.bitrate : 0;
+    const bBitrate = typeof b.bitrate === 'number' ? b.bitrate : 0;
+    return aBitrate - bBitrate;
+  })[0];
+}
+
+async function fetchYouTubeiPlayerResponse(
+  videoId: string,
+  watchUrl: string,
+  client: (typeof YOUTUBEI_CLIENTS)[number]
+): Promise<YouTubeiPlayerResponse> {
+  const response = await fetch(YOUTUBEI_PLAYER_ENDPOINT, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'User-Agent': client.userAgent,
+      Referer: watchUrl,
+      Origin: 'https://www.youtube.com',
+    },
+    body: JSON.stringify({
+      context: {
+        client: client.client,
+      },
+      videoId,
+    }),
+  });
+
+  if (!response.ok) {
+    throw new Error(`YouTubei HTTP ${response.status}`);
+  }
+
+  return (await response.json()) as YouTubeiPlayerResponse;
+}
+
+async function downloadWithYouTubeiDirect(url: string, outputTemplate: string): Promise<string | null> {
+  const videoId = extractVideoId(url);
+  if (!videoId) {
+    return null;
+  }
+
+  for (const client of YOUTUBEI_CLIENTS) {
+    try {
+      console.log(`[Server] YouTubei direct strategy: ${client.label}`);
+      const playerResponse = await fetchYouTubeiPlayerResponse(videoId, url, client);
+      const playabilityStatus = playerResponse.playabilityStatus?.status || 'UNKNOWN';
+      const playabilityReason = playerResponse.playabilityStatus?.reason || '';
+
+      if (playabilityStatus !== 'OK') {
+        console.warn(
+          `[Server] YouTubei ${client.label} not playable: ${playabilityStatus}${playabilityReason ? ` - ${playabilityReason}` : ''}`
+        );
+        continue;
+      }
+
+      const progressiveFormats = (playerResponse.streamingData?.formats || []).filter((format) => Boolean(format.url));
+      const selectedFormat = pickBestYouTubeiProgressiveFormat(progressiveFormats);
+      if (!selectedFormat?.url) {
+        console.warn(`[Server] YouTubei ${client.label} returned no usable progressive format`);
+        continue;
+      }
+
+      const expectedSize = parseContentLength(selectedFormat.contentLength);
+      if (expectedSize > MAX_AUDIO_SIZE_BYTES) {
+        throw new ApiError(
+          'Video is too long. Please use videos under 30 minutes.',
+          400,
+          'VIDEO_TOO_LARGE'
+        );
+      }
+
+      console.log(
+        `[Server] YouTubei selected format: client=${client.label}, itag=${selectedFormat.itag || 'unknown'}, mime=${selectedFormat.mimeType || 'unknown'}, size=${expectedSize || 0}`
+      );
+
+      const mediaResponse = await fetch(selectedFormat.url, {
+        headers: {
+          'User-Agent': client.userAgent,
+          Referer: url,
+          Origin: 'https://www.youtube.com',
+        },
+      });
+
+      if (!mediaResponse.ok) {
+        throw new Error(`Media download HTTP ${mediaResponse.status}`);
+      }
+
+      const mediaBytes = Buffer.from(await mediaResponse.arrayBuffer());
+      if (mediaBytes.length === 0) {
+        throw new Error('Media response is empty');
+      }
+
+      if (mediaBytes.length > MAX_AUDIO_SIZE_BYTES) {
+        throw new ApiError(
+          'Video is too long. Please use videos under 30 minutes.',
+          400,
+          'VIDEO_TOO_LARGE'
+        );
+      }
+
+      const extension = inferExtensionFromMimeType(selectedFormat.mimeType);
+      const outputFile = outputTemplate.replace('.%(ext)s', extension);
+      fs.writeFileSync(outputFile, mediaBytes);
+
+      console.log(`[Server] YouTubei direct download successful (${client.label})`);
+      return outputFile;
+    } catch (error) {
+      console.warn(
+        `[Server] YouTubei direct failed for ${client.label} | ${getErrorSnippet(getErrorText(error))}`
+      );
+    }
+  }
+
+  return null;
 }
 
 function getNodeJsRuntimeArg(): string {
@@ -947,7 +1142,11 @@ export async function POST(request: NextRequest) {
     cookieFile = cookieConfig.cookieFile;
     shouldCleanupCookieFile = cookieConfig.shouldCleanup;
 
-    audioFile = await downloadAudioWithYtDlp(normalizedUrl, outputTemplate, cookieFile);
+    audioFile = await downloadWithYouTubeiDirect(normalizedUrl, outputTemplate);
+
+    if (!audioFile) {
+      audioFile = await downloadAudioWithYtDlp(normalizedUrl, outputTemplate, cookieFile);
+    }
 
     if (!fs.existsSync(audioFile)) {
       throw new ApiError(
@@ -970,6 +1169,7 @@ export async function POST(request: NextRequest) {
     const contentTypes: Record<string, string> = {
       '.mp3': 'audio/mpeg',
       '.m4a': 'audio/mp4',
+      '.mp4': 'video/mp4',
       '.webm': 'audio/webm',
       '.opus': 'audio/opus',
     };
