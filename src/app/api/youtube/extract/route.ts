@@ -58,6 +58,15 @@ interface DownloadStrategy {
   flags: Record<string, string | number | boolean>;
 }
 
+interface StreamCandidate {
+  url: string;
+  formatId: string;
+  ext: string;
+  protocol: string;
+  abr: number;
+  sourceStrategy: string;
+}
+
 class ApiError extends Error {
   status: number;
   code: string;
@@ -596,6 +605,170 @@ function buildDownloadStrategies(outputTemplate: string, cookieFile: string | nu
   return strategies;
 }
 
+function buildMetadataStrategies(cookieFile: string | null): DownloadStrategy[] {
+  const nodeRuntime = getNodeJsRuntimeArg();
+  const webToken = process.env.YOUTUBE_WEB_PO_TOKEN?.trim();
+  const androidToken = process.env.YOUTUBE_ANDROID_PO_TOKEN?.trim();
+  const iosToken = process.env.YOUTUBE_IOS_PO_TOKEN?.trim();
+
+  const commonFlags: Record<string, string | number | boolean> = {
+    noPlaylist: true,
+    ignoreConfig: true,
+    geoBypass: true,
+    dumpSingleJson: true,
+    skipDownload: true,
+    simulate: true,
+    noWarnings: true,
+    socketTimeout: 15,
+    forceIpv4: true,
+    noCheckCertificates: true,
+    extractorRetries: 2,
+    jsRuntimes: nodeRuntime,
+    remoteComponents: 'ejs:github',
+  };
+
+  if (cookieFile) {
+    commonFlags.cookies = cookieFile;
+  }
+
+  const strategies: DownloadStrategy[] = [
+    {
+      label: 'metadata default web client',
+      flags: {
+        ...commonFlags,
+      },
+    },
+    {
+      label: 'metadata mweb client',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('mweb'),
+      },
+    },
+    {
+      label: 'metadata web_safari client',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('web_safari'),
+      },
+    },
+  ];
+
+  if (webToken) {
+    strategies.unshift({
+      label: 'metadata web client (po token)',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('web'),
+      },
+    });
+  }
+
+  if (androidToken) {
+    strategies.push({
+      label: 'metadata android client (po token)',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('android'),
+      },
+    });
+  }
+
+  if (iosToken) {
+    strategies.push({
+      label: 'metadata ios client (po token)',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('ios'),
+      },
+    });
+  }
+
+  return strategies;
+}
+
+function extractStreamCandidatesFromYtDlpResult(
+  rawResult: unknown,
+  strategyLabel: string
+): StreamCandidate[] {
+  const parsedResult = typeof rawResult === 'string' ? JSON.parse(rawResult) : rawResult;
+  const formats = (parsedResult as { formats?: Array<Record<string, unknown>> })?.formats || [];
+  const candidates: Array<StreamCandidate & { score: number; isAudioOnly: boolean }> = [];
+  const seenUrls = new Set<string>();
+
+  for (const format of formats) {
+    const url = typeof format.url === 'string' ? format.url : '';
+    const acodec = typeof format.acodec === 'string' ? format.acodec : '';
+    const vcodec = typeof format.vcodec === 'string' ? format.vcodec : '';
+    const ext = typeof format.ext === 'string' ? format.ext : 'unknown';
+    const protocol = typeof format.protocol === 'string' ? format.protocol : 'unknown';
+    const formatId = typeof format.format_id === 'string' ? format.format_id : 'unknown';
+    const abr = typeof format.abr === 'number' ? format.abr : 0;
+    const tbr = typeof format.tbr === 'number' ? format.tbr : 0;
+
+    if (!url || acodec === 'none') continue;
+    if (seenUrls.has(url)) continue;
+
+    const isAudioOnly = vcodec === 'none';
+    const protocolScore = protocol.includes('https') ? 40 : protocol.includes('m3u8') ? 20 : 0;
+    const extScore = ext === 'm4a' || ext === 'mp4' ? 30 : ext === 'webm' ? 20 : 0;
+    const bitrateScore = Math.min(abr || tbr, 256) / 8;
+    const audioOnlyScore = isAudioOnly ? 100 : 0;
+
+    candidates.push({
+      url,
+      formatId,
+      ext,
+      protocol,
+      abr: abr || tbr || 0,
+      sourceStrategy: strategyLabel,
+      score: audioOnlyScore + protocolScore + extScore + bitrateScore,
+      isAudioOnly,
+    });
+
+    seenUrls.add(url);
+  }
+
+  return candidates
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(({ score: _score, isAudioOnly: _isAudioOnly, ...candidate }) => candidate);
+}
+
+async function getClientStreamCandidates(
+  url: string,
+  cookieFile: string | null
+): Promise<StreamCandidate[]> {
+  const runner = await getYtDlpRunner();
+  const strategies = buildMetadataStrategies(cookieFile);
+  let lastErrorMessage = 'No stream candidates found.';
+
+  for (const strategy of strategies) {
+    try {
+      console.log(`[Server] yt-dlp metadata strategy: ${strategy.label}`);
+      const result = await runner(url, strategy.flags, {
+        timeout: DOWNLOAD_TIMEOUT_MS,
+        windowsHide: true,
+      });
+
+      const candidates = extractStreamCandidatesFromYtDlpResult(result, strategy.label);
+      if (candidates.length > 0) {
+        console.log(`[Server] metadata strategy succeeded with ${candidates.length} browser candidates`);
+        return candidates;
+      }
+
+      lastErrorMessage = `No usable audio formats from ${strategy.label}`;
+    } catch (error) {
+      lastErrorMessage = getErrorText(error);
+      console.warn(
+        `[Server] yt-dlp metadata failed for strategy: ${strategy.label} | ${getErrorSnippet(lastErrorMessage)}`
+      );
+    }
+  }
+
+  throw toApiErrorFromYtDlp(lastErrorMessage);
+}
+
 function findDownloadedAudioFile(outputTemplate: string): string | null {
   const outputDir = path.dirname(outputTemplate);
   const outputPrefix = path.basename(outputTemplate).replace('.%(ext)s', '');
@@ -699,6 +872,14 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const rawUrl = typeof body?.url === 'string' ? body.url.trim() : '';
     const shouldDownloadAudio = Boolean(body?.downloadAudio);
+    const includeStreamCandidates = Boolean(body?.includeStreamCandidates);
+    const clientFallbackReason = typeof body?.clientFallbackReason === 'string'
+      ? body.clientFallbackReason.trim()
+      : '';
+
+    if (clientFallbackReason) {
+      console.log(`[Server] Client requested server fallback: ${clientFallbackReason}`);
+    }
 
     if (!rawUrl) {
       throw new ApiError('URL is required', 400, 'URL_REQUIRED');
@@ -728,7 +909,34 @@ export async function POST(request: NextRequest) {
     };
 
     if (!shouldDownloadAudio) {
-      return NextResponse.json(videoInfo);
+      let clientStreamCandidates: StreamCandidate[] = [];
+      let clientStreamStatus: 'ready' | 'unavailable' = 'unavailable';
+      let clientStreamErrorCode: string | null = null;
+
+      if (includeStreamCandidates) {
+        const tempDir = getWritableTempDir();
+        const cookieConfig = createCookiesFile(tempDir);
+        cookieFile = cookieConfig.cookieFile;
+        shouldCleanupCookieFile = cookieConfig.shouldCleanup;
+
+        try {
+          clientStreamCandidates = await getClientStreamCandidates(normalizedUrl, cookieFile);
+          clientStreamStatus = clientStreamCandidates.length > 0 ? 'ready' : 'unavailable';
+        } catch (candidateError) {
+          const candidateApiError = toApiError(candidateError);
+          clientStreamErrorCode = candidateApiError.code;
+          console.warn(
+            `[Server] Browser candidate generation failed (${candidateApiError.code}): ${candidateApiError.message}`
+          );
+        }
+      }
+
+      return NextResponse.json({
+        ...videoInfo,
+        clientStreamCandidates,
+        clientStreamStatus,
+        clientStreamErrorCode,
+      });
     }
 
     const tempDir = getWritableTempDir();
