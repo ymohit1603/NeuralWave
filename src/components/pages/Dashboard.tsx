@@ -6,7 +6,6 @@ import { Sidebar } from "@/components/dashboard/Sidebar";
 import { AudioUploader, SearchResult } from "@/components/dashboard/AudioUploader";
 import { AudioProcessor } from "@/components/dashboard/AudioProcessor";
 import { ErrorModal } from "@/components/ErrorModal";
-import { PaywallModal } from "@/components/PaywallModal";
 import { ProgressTracker } from "@/components/ProgressTracker";
 import { Confetti } from "@/components/Confetti";
 import { ProcessingOverlay } from "@/components/ProcessingOverlay";
@@ -62,7 +61,6 @@ export default function Dashboard() {
   const [processingState, setProcessingState] = useState<ProcessingState>("idle");
   const [currentFile, setCurrentFile] = useState<string | null>(null);
   const [showErrorModal, setShowErrorModal] = useState(false);
-  const [showSearchPaywall, setShowSearchPaywall] = useState(false);
   const [errorDetails, setErrorDetails] = useState<{ title: string; message: string; details?: string }>({
     title: '',
     message: ''
@@ -343,7 +341,7 @@ export default function Dashboard() {
     } catch (error) {
       console.error('Search error:', error);
       if (!hasActiveSubscription) {
-        setShowSearchPaywall(true);
+        router.push('/dashboard/upgrade');
         return;
       }
 
@@ -362,7 +360,7 @@ export default function Dashboard() {
     // Track service usage
     posthogEvents.serviceUsed('search', { videoId: result.videoId, title: result.title });
     if (!hasActiveSubscription) {
-      setShowSearchPaywall(true);
+      router.push('/dashboard/upgrade');
       return;
     }
 
@@ -681,15 +679,6 @@ export default function Dashboard() {
           )}
         </div>
       </main>
-
-      {/* Search paywall */}
-      <PaywallModal
-        open={showSearchPaywall}
-        onClose={() => setShowSearchPaywall(false)}
-        mode="upgrade"
-        title="Unlock Search Conversion"
-        description="Search results are visible, but converting from search requires Pro."
-      />
 
       {/* Confetti celebration */}
       <Confetti active={showConfetti} onComplete={() => setShowConfetti(false)} />
