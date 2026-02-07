@@ -13,6 +13,7 @@ const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
 const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.mp4', '.webm', '.opus'] as const;
 const ERROR_LOG_SNIPPET_LENGTH = 800;
+const EXTRACTION_PIPELINE_VERSION = 'youtubei-browser-first-v4-2026-02-07';
 const YOUTUBEI_PLAYER_ENDPOINT = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const YT_DLP_BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 const YT_DLP_ASSET_CANDIDATES = (() => {
@@ -526,6 +527,10 @@ function inferExtensionFromMimeType(mimeType: string | undefined): '.mp4' | '.we
   return mimeType.toLowerCase().includes('webm') ? '.webm' : '.mp4';
 }
 
+function inferCandidateExtFromMimeType(mimeType: string | undefined): 'mp4' | 'webm' {
+  return inferExtensionFromMimeType(mimeType) === '.webm' ? 'webm' : 'mp4';
+}
+
 function parseContentLength(value: string | number | undefined): number {
   if (typeof value === 'number' && Number.isFinite(value)) {
     return value;
@@ -562,6 +567,91 @@ function pickBestYouTubeiProgressiveFormat(formats: YouTubeiFormat[]): YouTubeiF
   })[0];
 }
 
+function extractYouTubeiStreamCandidates(
+  playerResponse: YouTubeiPlayerResponse,
+  sourceStrategy: string
+): StreamCandidate[] {
+  const formats = [
+    ...(playerResponse.streamingData?.formats || []),
+    ...(playerResponse.streamingData?.adaptiveFormats || []),
+  ];
+
+  const seenUrls = new Set<string>();
+  const ranked: Array<StreamCandidate & { score: number }> = [];
+
+  for (const format of formats) {
+    if (!format.url) continue;
+    if (seenUrls.has(format.url)) continue;
+
+    const mime = (format.mimeType || '').toLowerCase();
+    const hasAudio = mime.includes('audio/') || mime.includes('mp4a') || mime.includes('opus');
+    if (!hasAudio) continue;
+
+    const hasVideo = mime.includes('video/');
+    const ext = inferCandidateExtFromMimeType(format.mimeType);
+    const bitrate = typeof format.bitrate === 'number' ? format.bitrate : 0;
+    const score =
+      (hasVideo ? 20 : 120) +
+      (ext === 'mp4' ? 15 : 10) +
+      Math.min(Math.floor(bitrate / 25000), 20);
+
+    ranked.push({
+      url: format.url,
+      formatId: format.itag ? String(format.itag) : 'unknown',
+      ext,
+      protocol: 'https',
+      abr: Math.round(bitrate / 1000),
+      sourceStrategy,
+      score,
+    });
+    seenUrls.add(format.url);
+  }
+
+  return ranked
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(({ score: _score, ...candidate }) => candidate);
+}
+
+async function getYouTubeiClientStreamCandidates(
+  videoId: string,
+  watchUrl: string
+): Promise<StreamCandidate[]> {
+  for (const client of YOUTUBEI_CLIENTS) {
+    try {
+      console.log(`[Server] YouTubei metadata strategy: ${client.label}`);
+      const playerResponse = await fetchYouTubeiPlayerResponse(videoId, watchUrl, client);
+      const playabilityStatus = playerResponse.playabilityStatus?.status || 'UNKNOWN';
+      const playabilityReason = playerResponse.playabilityStatus?.reason || '';
+
+      if (playabilityStatus !== 'OK') {
+        console.warn(
+          `[Server] YouTubei metadata ${client.label} not playable: ${playabilityStatus}${playabilityReason ? ` - ${playabilityReason}` : ''}`
+        );
+        continue;
+      }
+
+      const candidates = extractYouTubeiStreamCandidates(
+        playerResponse,
+        `youtubei-metadata:${client.label}`
+      );
+
+      if (candidates.length > 0) {
+        console.log(
+          `[Server] YouTubei metadata succeeded with ${candidates.length} browser candidates (${client.label})`
+        );
+        return candidates;
+      }
+    } catch (error) {
+      console.warn(
+        `[Server] YouTubei metadata failed for ${client.label} | ${getErrorSnippet(getErrorText(error))}`
+      );
+    }
+  }
+
+  return [];
+}
+
 async function fetchYouTubeiPlayerResponse(
   videoId: string,
   watchUrl: string,
@@ -590,16 +680,63 @@ async function fetchYouTubeiPlayerResponse(
   return (await response.json()) as YouTubeiPlayerResponse;
 }
 
-async function downloadWithYouTubeiDirect(url: string, outputTemplate: string): Promise<string | null> {
-  const videoId = extractVideoId(url);
-  if (!videoId) {
-    return null;
+async function downloadFromYouTubeiMediaUrl(
+  mediaUrl: string,
+  watchUrl: string,
+  userAgent: string,
+  outputTemplate: string,
+  extension: string
+): Promise<string> {
+  const mediaResponse = await fetch(mediaUrl, {
+    headers: {
+      'User-Agent': userAgent,
+      Referer: watchUrl,
+      Origin: 'https://www.youtube.com',
+    },
+  });
+
+  if (!mediaResponse.ok) {
+    throw new Error(`Media download HTTP ${mediaResponse.status}`);
   }
+
+  const declaredSize = parseContentLength(mediaResponse.headers.get('content-length') ?? undefined);
+  if (declaredSize > MAX_AUDIO_SIZE_BYTES) {
+    throw new ApiError(
+      'Video is too long. Please use videos under 30 minutes.',
+      400,
+      'VIDEO_TOO_LARGE'
+    );
+  }
+
+  const mediaBytes = Buffer.from(await mediaResponse.arrayBuffer());
+  if (mediaBytes.length === 0) {
+    throw new Error('Media response is empty');
+  }
+
+  if (mediaBytes.length > MAX_AUDIO_SIZE_BYTES) {
+    throw new ApiError(
+      'Video is too long. Please use videos under 30 minutes.',
+      400,
+      'VIDEO_TOO_LARGE'
+    );
+  }
+
+  const normalizedExtension = extension.startsWith('.') ? extension : `.${extension}`;
+  const outputFile = outputTemplate.replace('.%(ext)s', normalizedExtension);
+  fs.writeFileSync(outputFile, mediaBytes);
+  return outputFile;
+}
+
+async function downloadWithYouTubeiDirect(
+  videoId: string,
+  watchUrl: string,
+  outputTemplate: string
+): Promise<string | null> {
 
   for (const client of YOUTUBEI_CLIENTS) {
     try {
       console.log(`[Server] YouTubei direct strategy: ${client.label}`);
-      const playerResponse = await fetchYouTubeiPlayerResponse(videoId, url, client);
+      const playerResponse = await fetchYouTubeiPlayerResponse(videoId, watchUrl, client);
       const playabilityStatus = playerResponse.playabilityStatus?.status || 'UNKNOWN';
       const playabilityReason = playerResponse.playabilityStatus?.reason || '';
 
@@ -612,56 +749,87 @@ async function downloadWithYouTubeiDirect(url: string, outputTemplate: string): 
 
       const progressiveFormats = (playerResponse.streamingData?.formats || []).filter((format) => Boolean(format.url));
       const selectedFormat = pickBestYouTubeiProgressiveFormat(progressiveFormats);
-      if (!selectedFormat?.url) {
+      if (selectedFormat?.url) {
+        const expectedSize = parseContentLength(selectedFormat.contentLength);
+        if (expectedSize > MAX_AUDIO_SIZE_BYTES) {
+          throw new ApiError(
+            'Video is too long. Please use videos under 30 minutes.',
+            400,
+            'VIDEO_TOO_LARGE'
+          );
+        }
+
+        console.log(
+          `[Server] YouTubei selected format: client=${client.label}, itag=${selectedFormat.itag || 'unknown'}, mime=${selectedFormat.mimeType || 'unknown'}, size=${expectedSize || 0}`
+        );
+
+        try {
+          const extension = inferExtensionFromMimeType(selectedFormat.mimeType);
+          const outputFile = await downloadFromYouTubeiMediaUrl(
+            selectedFormat.url,
+            watchUrl,
+            client.userAgent,
+            outputTemplate,
+            extension
+          );
+          console.log(`[Server] YouTubei progressive direct download successful (${client.label})`);
+          return outputFile;
+        } catch (progressiveError) {
+          if (progressiveError instanceof ApiError) {
+            throw progressiveError;
+          }
+
+          console.warn(
+            `[Server] YouTubei progressive download failed for ${client.label} | ${getErrorSnippet(getErrorText(progressiveError))}`
+          );
+        }
+      } else {
         console.warn(`[Server] YouTubei ${client.label} returned no usable progressive format`);
+      }
+
+      const streamCandidates = extractYouTubeiStreamCandidates(
+        playerResponse,
+        `youtubei-direct:${client.label}`
+      );
+
+      if (streamCandidates.length === 0) {
+        console.warn(`[Server] YouTubei ${client.label} returned no direct stream candidates`);
         continue;
       }
 
-      const expectedSize = parseContentLength(selectedFormat.contentLength);
-      if (expectedSize > MAX_AUDIO_SIZE_BYTES) {
-        throw new ApiError(
-          'Video is too long. Please use videos under 30 minutes.',
-          400,
-          'VIDEO_TOO_LARGE'
-        );
-      }
-
       console.log(
-        `[Server] YouTubei selected format: client=${client.label}, itag=${selectedFormat.itag || 'unknown'}, mime=${selectedFormat.mimeType || 'unknown'}, size=${expectedSize || 0}`
+        `[Server] YouTubei ${client.label} trying ${streamCandidates.length} direct stream candidates`
       );
 
-      const mediaResponse = await fetch(selectedFormat.url, {
-        headers: {
-          'User-Agent': client.userAgent,
-          Referer: url,
-          Origin: 'https://www.youtube.com',
-        },
-      });
+      for (const candidate of streamCandidates) {
+        try {
+          const outputFile = await downloadFromYouTubeiMediaUrl(
+            candidate.url,
+            watchUrl,
+            client.userAgent,
+            outputTemplate,
+            candidate.ext
+          );
 
-      if (!mediaResponse.ok) {
-        throw new Error(`Media download HTTP ${mediaResponse.status}`);
+          console.log(
+            `[Server] YouTubei candidate download successful (${client.label}, itag=${candidate.formatId}, ext=${candidate.ext})`
+          );
+          return outputFile;
+        } catch (candidateError) {
+          if (candidateError instanceof ApiError) {
+            throw candidateError;
+          }
+
+          console.warn(
+            `[Server] YouTubei candidate failed (${client.label}, itag=${candidate.formatId}) | ${getErrorSnippet(getErrorText(candidateError))}`
+          );
+        }
       }
-
-      const mediaBytes = Buffer.from(await mediaResponse.arrayBuffer());
-      if (mediaBytes.length === 0) {
-        throw new Error('Media response is empty');
-      }
-
-      if (mediaBytes.length > MAX_AUDIO_SIZE_BYTES) {
-        throw new ApiError(
-          'Video is too long. Please use videos under 30 minutes.',
-          400,
-          'VIDEO_TOO_LARGE'
-        );
-      }
-
-      const extension = inferExtensionFromMimeType(selectedFormat.mimeType);
-      const outputFile = outputTemplate.replace('.%(ext)s', extension);
-      fs.writeFileSync(outputFile, mediaBytes);
-
-      console.log(`[Server] YouTubei direct download successful (${client.label})`);
-      return outputFile;
     } catch (error) {
+      if (error instanceof ApiError) {
+        throw error;
+      }
+
       console.warn(
         `[Server] YouTubei direct failed for ${client.label} | ${getErrorSnippet(getErrorText(error))}`
       );
@@ -931,9 +1099,15 @@ function extractStreamCandidatesFromYtDlpResult(
 }
 
 async function getClientStreamCandidates(
+  videoId: string,
   url: string,
   cookieFile: string | null
 ): Promise<StreamCandidate[]> {
+  const youtubeiCandidates = await getYouTubeiClientStreamCandidates(videoId, url);
+  if (youtubeiCandidates.length > 0) {
+    return youtubeiCandidates;
+  }
+
   const runner = await getYtDlpRunner();
   const strategies = buildMetadataStrategies(cookieFile);
   let lastErrorMessage = 'No stream candidates found.';
@@ -1065,6 +1239,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
+    console.log(`[Server] YouTube extraction pipeline: ${EXTRACTION_PIPELINE_VERSION}`);
     const rawUrl = typeof body?.url === 'string' ? body.url.trim() : '';
     const shouldDownloadAudio = Boolean(body?.downloadAudio);
     const includeStreamCandidates = Boolean(body?.includeStreamCandidates);
@@ -1115,7 +1290,7 @@ export async function POST(request: NextRequest) {
         shouldCleanupCookieFile = cookieConfig.shouldCleanup;
 
         try {
-          clientStreamCandidates = await getClientStreamCandidates(normalizedUrl, cookieFile);
+          clientStreamCandidates = await getClientStreamCandidates(videoId, normalizedUrl, cookieFile);
           clientStreamStatus = clientStreamCandidates.length > 0 ? 'ready' : 'unavailable';
         } catch (candidateError) {
           const candidateApiError = toApiError(candidateError);
@@ -1142,7 +1317,7 @@ export async function POST(request: NextRequest) {
     cookieFile = cookieConfig.cookieFile;
     shouldCleanupCookieFile = cookieConfig.shouldCleanup;
 
-    audioFile = await downloadWithYouTubeiDirect(normalizedUrl, outputTemplate);
+    audioFile = await downloadWithYouTubeiDirect(videoId, normalizedUrl, outputTemplate);
 
     if (!audioFile) {
       audioFile = await downloadAudioWithYtDlp(normalizedUrl, outputTemplate, cookieFile);
