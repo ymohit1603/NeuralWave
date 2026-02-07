@@ -332,6 +332,29 @@ function toApiErrorFromYtDlp(message: string): ApiError {
   const normalized = message.toLowerCase();
 
   if (
+    normalized.includes('no supported javascript runtime') ||
+    normalized.includes('challenge solver script distribution')
+  ) {
+    return new ApiError(
+      'Extraction runtime setup is incomplete. Please retry in a moment.',
+      503,
+      'EXTRACTOR_RUNTIME_UNAVAILABLE'
+    );
+  }
+
+  if (
+    normalized.includes('gvs po token') ||
+    normalized.includes('po token') ||
+    normalized.includes('po_token')
+  ) {
+    return new ApiError(
+      'This video currently needs authenticated YouTube access. Please retry, or configure cookies/PO token env vars for higher success.',
+      503,
+      'YOUTUBE_REQUIRES_AUTH'
+    );
+  }
+
+  if (
     normalized.includes('enoent') ||
     normalized.includes('spawn') ||
     normalized.includes('eacces') ||
@@ -444,24 +467,54 @@ function createCookiesFile(tempDir: string): { cookieFile: string | null; should
   return { cookieFile: null, shouldCleanup: false };
 }
 
-function getOptionalExtractorArgs(): string {
-  const poToken = process.env.YOUTUBE_PO_TOKEN?.trim();
+function getNodeJsRuntimeArg(): string {
+  return `node:${process.execPath}`;
+}
+
+function normalizePoToken(token: string, scope: 'web' | 'mweb' | 'android' | 'ios'): string {
+  const normalized = token.trim();
+  if (!normalized) return normalized;
+  if (normalized.includes('+')) return normalized;
+  return `${scope}.gvs+${normalized}`;
+}
+
+function buildYoutubeExtractorArgs(
+  playerClient: 'web' | 'mweb' | 'web_safari' | 'android' | 'ios'
+): string {
+  const parts = [`youtube:player_client=${playerClient}`];
   const visitorData = process.env.YOUTUBE_VISITOR_DATA?.trim();
 
-  if (!poToken || !visitorData) {
-    return '';
+  const tokenByClient: Partial<Record<typeof playerClient, string | undefined>> = {
+    web: process.env.YOUTUBE_WEB_PO_TOKEN,
+    mweb: process.env.YOUTUBE_MWEB_PO_TOKEN,
+    web_safari: process.env.YOUTUBE_WEB_PO_TOKEN,
+    android: process.env.YOUTUBE_ANDROID_PO_TOKEN,
+    ios: process.env.YOUTUBE_IOS_PO_TOKEN,
+  };
+
+  const rawToken = tokenByClient[playerClient]?.trim();
+  if (rawToken) {
+    const poScope = playerClient === 'web_safari' ? 'web' : playerClient;
+    parts.push(`po_token=${normalizePoToken(rawToken, poScope as 'web' | 'mweb' | 'android' | 'ios')}`);
+    if (visitorData) {
+      parts.push(`visitor_data=${visitorData}`);
+      parts.push('player_skip=webpage,configs');
+    }
   }
 
-  return `;po_token=${poToken};visitor_data=${visitorData}`;
+  return parts.join(';');
 }
 
 function buildDownloadStrategies(outputTemplate: string, cookieFile: string | null): DownloadStrategy[] {
-  const optionalExtractorArgs = getOptionalExtractorArgs();
+  const nodeRuntime = getNodeJsRuntimeArg();
+  const webToken = process.env.YOUTUBE_WEB_PO_TOKEN?.trim();
+  const androidToken = process.env.YOUTUBE_ANDROID_PO_TOKEN?.trim();
+  const iosToken = process.env.YOUTUBE_IOS_PO_TOKEN?.trim();
   const commonFlags: Record<string, string | number | boolean> = {
     noPlaylist: true,
     ignoreConfig: true,
     geoBypass: true,
-    format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
+    format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/bestaudio',
     output: outputTemplate,
     retries: 2,
     fragmentRetries: 2,
@@ -470,38 +523,35 @@ function buildDownloadStrategies(outputTemplate: string, cookieFile: string | nu
     socketTimeout: 15,
     forceIpv4: true,
     noCheckCertificates: true,
+    jsRuntimes: nodeRuntime,
+    remoteComponents: 'ejs:github',
   };
 
   if (cookieFile) {
     commonFlags.cookies = cookieFile;
   }
 
-  return [
+  const strategies: DownloadStrategy[] = [
     {
-      label: 'android client',
+      label: 'default web client',
       flags: {
         ...commonFlags,
-        extractorArgs: `youtube:player_client=android${optionalExtractorArgs}`,
       },
     },
     {
-      label: 'ios client',
+      label: 'mweb client',
       flags: {
         ...commonFlags,
-        extractorArgs: `youtube:player_client=ios${optionalExtractorArgs}`,
+        format: 'bestaudio/best',
+        extractorArgs: buildYoutubeExtractorArgs('mweb'),
       },
     },
     {
-      label: 'tv embedded client',
+      label: 'web_safari fallback',
       flags: {
         ...commonFlags,
-        extractorArgs: `youtube:player_client=tv_embedded${optionalExtractorArgs}`,
-      },
-    },
-    {
-      label: 'default client',
-      flags: {
-        ...commonFlags,
+        format: 'bestaudio/best',
+        extractorArgs: buildYoutubeExtractorArgs('web_safari'),
       },
     },
     {
@@ -512,6 +562,38 @@ function buildDownloadStrategies(outputTemplate: string, cookieFile: string | nu
       },
     },
   ];
+
+  if (webToken) {
+    strategies.unshift({
+      label: 'web client (po token)',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('web'),
+      },
+    });
+  }
+
+  if (androidToken) {
+    strategies.push({
+      label: 'android client (po token)',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('android'),
+      },
+    });
+  }
+
+  if (iosToken) {
+    strategies.push({
+      label: 'ios client (po token)',
+      flags: {
+        ...commonFlags,
+        extractorArgs: buildYoutubeExtractorArgs('ios'),
+      },
+    });
+  }
+
+  return strategies;
 }
 
 function findDownloadedAudioFile(outputTemplate: string): string | null {
