@@ -52,7 +52,6 @@
     "lucide-react": "^0.462.0",
     "next": "^15.1.6",
     "next-themes": "^0.3.0",
-    "play-dl": "^1.9.7",
     "posthog-js": "^1.341.0",
     "react": "^18.3.1",
     "react-day-picker": "^8.10.1",
@@ -66,6 +65,7 @@
     "tone": "^15.1.22",
     "vaul": "^0.9.9",
     "web-audio-beat-detector": "^8.2.34",
+    "yt-dlp-exec": "^1.0.2",
     "zod": "^3.25.76"
   },
   "devDependencies": {

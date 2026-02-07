@@ -303,6 +303,8 @@ export default function Dashboard() {
         userFriendlyMessage = "This video is too long. Please choose a video under 30 minutes.";
       } else if (errorMessage.includes('network') || errorMessage.includes('fetch')) {
         userFriendlyMessage = "Network error. Please check your internet connection and try again.";
+      } else if (errorMessage.toLowerCase().includes('temporarily blocked automated access') || errorMessage.toLowerCase().includes('bot')) {
+        userFriendlyMessage = "YouTube temporarily blocked automated access for this video. Please try another public video or retry in a few minutes.";
       } else if (errorMessage.includes('unavailable') || errorMessage.includes('private')) {
         userFriendlyMessage = "This video is unavailable or private. Please try a different video.";
       }
