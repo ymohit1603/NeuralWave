@@ -56,6 +56,7 @@ export function AudioProcessor({
   const hasCompletedProcessingRef = useRef(false);
   const isMountedRef = useRef(true);
   const processingRunIdRef = useRef(0);
+  const appliedInitialSettingsKeyRef = useRef<string | null>(null);
 
   const { toast } = useToast();
 
@@ -110,16 +111,24 @@ export function AudioProcessor({
     }
   }, [audioBuffer, audioEngine.engine]);
 
-  // Apply initial settings when loading a saved track
+  // Apply initial settings once when loading a saved track.
   useEffect(() => {
-    if (initialSettings && audioEngine.engine && audioEngine.isReady) {
-      // Validate settings before applying
-      if (typeof initialSettings.bassWarmth === 'number' &&
-        typeof initialSettings.clarity === 'number') {
-        audioEngine.applySettings(initialSettings);
-      }
+    if (!initialSettings || !audioEngine.engine || !audioEngine.isReady) {
+      return;
     }
-  }, [initialSettings, audioEngine.engine, audioEngine.isReady]);
+
+    const settingsKey = trackId || `file:${fileName}`;
+    if (appliedInitialSettingsKeyRef.current === settingsKey) {
+      return;
+    }
+
+    // Validate settings before applying
+    if (typeof initialSettings.bassWarmth === 'number' &&
+      typeof initialSettings.clarity === 'number') {
+      audioEngine.applySettings(initialSettings);
+      appliedInitialSettingsKeyRef.current = settingsKey;
+    }
+  }, [initialSettings, audioEngine.engine, audioEngine.isReady, trackId, fileName]);
 
   // If we have a trackId, mark as already complete (loading saved track)
   useEffect(() => {
@@ -386,17 +395,24 @@ export function AudioProcessor({
   ) => {
     audioEngine.updateParameter(param, value);
 
-    // Auto-save settings for existing saved tracks (debounced via the engine)
-    if (hasSavedTrack && onSaveTrack && processedBuffer) {
+    // Auto-save settings for existing saved tracks.
+    const bufferForSave = processedBuffer || audioBuffer;
+    if (hasSavedTrack && onSaveTrack && bufferForSave) {
       // Get updated settings after the parameter change
       const updatedSettings = { ...audioEngine.settings, [param]: value };
-      onSaveTrack(updatedSettings, processedBuffer).catch(console.error);
+      onSaveTrack(updatedSettings, bufferForSave).catch(console.error);
     }
-  }, [audioEngine, hasSavedTrack, onSaveTrack, processedBuffer]);
+  }, [audioEngine, hasSavedTrack, onSaveTrack, processedBuffer, audioBuffer]);
 
   const handleModeChange = useCallback((mode: EffectMode) => {
     audioEngine.setMode(mode);
-  }, [audioEngine]);
+
+    const bufferForSave = processedBuffer || audioBuffer;
+    if (hasSavedTrack && onSaveTrack && bufferForSave) {
+      const updatedSettings = { ...audioEngine.settings, mode };
+      onSaveTrack(updatedSettings, bufferForSave).catch(console.error);
+    }
+  }, [audioEngine, hasSavedTrack, onSaveTrack, processedBuffer, audioBuffer]);
 
   // Generate wave bars for visualization
   const waveBars = Array.from({ length: 40 }, (_, i) => i);
