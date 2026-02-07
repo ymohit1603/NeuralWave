@@ -5,8 +5,8 @@ import { useRouter, useSearchParams } from "next/navigation";
 import { Sidebar } from "@/components/dashboard/Sidebar";
 import { AudioUploader, SearchResult } from "@/components/dashboard/AudioUploader";
 import { AudioProcessor } from "@/components/dashboard/AudioProcessor";
-import { AuthModal } from "@/components/AuthModal";
 import { ErrorModal } from "@/components/ErrorModal";
+import { PaywallModal } from "@/components/PaywallModal";
 import { ProgressTracker } from "@/components/ProgressTracker";
 import { Confetti } from "@/components/Confetti";
 import { ProcessingOverlay } from "@/components/ProcessingOverlay";
@@ -56,13 +56,13 @@ export default function Dashboard() {
   const router = useRouter();
   const searchParams = useSearchParams();
   const { preferences, incrementConversions } = useUserPreferences();
-  const { user, canConvert, incrementFreeConversion, hasActiveSubscription } = useAuth();
+  const { hasActiveSubscription } = useAuth();
   const { tracks, isLoading: isLoadingSavedTracks, addTrack, getTrack, getTrackAudioBuffer, getRecentTracks, updateTrackSettings } = useSavedTracks();
 
   const [processingState, setProcessingState] = useState<ProcessingState>("idle");
   const [currentFile, setCurrentFile] = useState<string | null>(null);
-  const [showAuthModal, setShowAuthModal] = useState(false);
   const [showErrorModal, setShowErrorModal] = useState(false);
+  const [showSearchPaywall, setShowSearchPaywall] = useState(false);
   const [errorDetails, setErrorDetails] = useState<{ title: string; message: string; details?: string }>({
     title: '',
     message: ''
@@ -233,28 +233,17 @@ export default function Dashboard() {
     // Processing state will be set by auto-processing in AudioUploader
   };
 
-  const handleUrlSubmit = async (url: string) => {
-    // For YouTube extraction, allow guests and users with free conversions
-    // Block only users who have used their free conversion and don't have subscription
-    if (user && !hasActiveSubscription && !canConvert) {
-      router.push('/dashboard/upgrade');
-      toast({
-        title: "Free Conversion Used",
-        description: "Upgrade to Pro for unlimited conversions.",
-      });
-      return;
-    }
-
+  const handleUrlSubmit = async (url: string, source: 'youtube' | 'search' = 'youtube') => {
     setIsLoadingYouTube(true);
     setShowProcessingOverlay(true);
     setYoutubeThumbnail(null);
     setYoutubeVideoInfo(null);
     setYoutubeUrl(url);
-    setAudioSource('youtube');
+    setAudioSource(source);
     setYoutubeProgress({ stage: 'Starting...', progress: 0 });
 
     // Track service usage
-    posthogEvents.serviceUsed('youtube', { url });
+    posthogEvents.serviceUsed(source, { url });
 
     try {
       const { audioBuffer, videoInfo } = await extractYouTubeAudio(
@@ -277,7 +266,7 @@ export default function Dashboard() {
 
       // Track the upload
       trackEvent.fileUploaded(audioBuffer.length, audioBuffer.duration);
-      posthogEvents.conversionStarted('youtube');
+      posthogEvents.conversionStarted(source);
 
       toast({
         title: "YouTube audio extracted!",
@@ -353,6 +342,11 @@ export default function Dashboard() {
       }
     } catch (error) {
       console.error('Search error:', error);
+      if (!hasActiveSubscription) {
+        setShowSearchPaywall(true);
+        return;
+      }
+
       toast({
         title: "Search failed",
         description: (error as Error).message || "Please try again",
@@ -367,9 +361,14 @@ export default function Dashboard() {
     setAudioSource('search');
     // Track service usage
     posthogEvents.serviceUsed('search', { videoId: result.videoId, title: result.title });
+    if (!hasActiveSubscription) {
+      setShowSearchPaywall(true);
+      return;
+    }
+
     // Convert search result to YouTube URL and trigger extraction
     const youtubeUrl = `https://www.youtube.com/watch?v=${result.videoId}`;
-    handleUrlSubmit(youtubeUrl);
+    handleUrlSubmit(youtubeUrl, 'search');
   };
 
   const handleProcessingComplete = async (processedBuffer: AudioBuffer) => {
@@ -387,15 +386,6 @@ export default function Dashboard() {
 
     incrementConversions();
     trackEvent.conversionCompleted(preferences.conversions + 1);
-
-    // Increment free conversion if not subscribed (mark as used immediately)
-    if (user && !hasActiveSubscription && canConvert) {
-      await incrementFreeConversion();
-      toast({
-        title: "Free Conversion Used",
-        description: "You've used your 1 free conversion. Next track requires Pro!",
-      });
-    }
 
     // Save the processed track automatically (only if not already saved)
     if (processedBuffer && currentFile && !currentTrackId && !hasSavedTrack) {
@@ -582,17 +572,15 @@ export default function Dashboard() {
               {processingState === "idle" ? (
                 <AudioUploader
                   onFileSelect={handleFileSelect}
-                  onUrlSubmit={handleUrlSubmit}
                   onSearch={handleSearch}
                   onSearchResultSelect={handleSearchResultSelect}
                   onAudioReady={handleAudioReady}
                   onProcessStart={handleProcessStart}
                   isLoadingYouTube={isLoadingYouTube}
                   youtubeProgress={youtubeProgress}
-                  youtubeThumbnail={youtubeThumbnail}
-                  youtubeVideoInfo={youtubeVideoInfo}
                   searchResults={searchResults}
                   isSearching={isSearching}
+                  hasActiveSubscription={hasActiveSubscription}
                 />
               ) : (
                 <AudioProcessor
@@ -687,20 +675,20 @@ export default function Dashboard() {
               </div>
               <h3 className="font-semibold mb-2">Your music library is empty</h3>
               <p className="text-sm text-muted-foreground mb-4">
-                Upload a song or search YouTube to create your first neural-optimized track
+                Upload a song to create your first neural-optimized track
               </p>
             </div>
           )}
         </div>
       </main>
 
-      {/* Auth modal */}
-      <AuthModal
-        open={showAuthModal}
-        onClose={() => setShowAuthModal(false)}
-        mode="signup"
-        title="🎵 Get Your First Free Conversion"
-        description="Sign in to convert your first track for free!"
+      {/* Search paywall */}
+      <PaywallModal
+        open={showSearchPaywall}
+        onClose={() => setShowSearchPaywall(false)}
+        mode="upgrade"
+        title="Unlock Search Conversion"
+        description="Search results are visible, but converting from search requires Pro."
       />
 
       {/* Confetti celebration */}
@@ -713,7 +701,7 @@ export default function Dashboard() {
         title={errorDetails.title}
         message={errorDetails.message}
         details={errorDetails.details}
-        onRetry={youtubeUrl ? () => handleUrlSubmit(youtubeUrl) : undefined}
+        onRetry={youtubeUrl ? () => handleUrlSubmit(youtubeUrl, audioSource === 'search' ? 'search' : 'youtube') : undefined}
       />
 
       {/* Processing Overlay */}

@@ -1,12 +1,10 @@
 'use client';
 
 import { useState, useEffect, useRef, useCallback } from "react";
-import { useRouter } from "next/navigation";
 import { Button } from "@/components/ui/button";
 import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2 } from "lucide-react";
 import { processAudio, exportAsWAV, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { useToast } from "@/hooks/use-toast";
-import { createPreviewWithFade, PREVIEW_DURATION } from "@/lib/audioPreview";
 import { AuthModal } from "@/components/AuthModal";
 import { useAuth } from "@/contexts/AuthContext";
 import { AudioControlPanel } from "@/components/audio-controls";
@@ -34,7 +32,6 @@ export function AudioProcessor({
   initialSettings,
   trackId,
 }: AudioProcessorProps) {
-  const router = useRouter();
   const [progress, setProgress] = useState(0);
   const [stage, setStage] = useState("Initializing...");
   const [isProcessing, setIsProcessing] = useState(false);
@@ -49,7 +46,7 @@ export function AudioProcessor({
   const [useRealTimeEngine] = useState(true);
   const [hasSavedTrack, setHasSavedTrack] = useState(!!trackId);
 
-  const { user, hasActiveSubscription, canConvert } = useAuth();
+  const { user } = useAuth();
   const audioContextRef = useRef<AudioContext | null>(null);
   const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -60,16 +57,6 @@ export function AudioProcessor({
   const isMountedRef = useRef(true);
   const processingRunIdRef = useRef(0);
 
-  // Use refs for callback closures to always get current values
-  const userRef = useRef(user);
-  const subscriptionRef = useRef(hasActiveSubscription);
-  const canConvertRef = useRef(canConvert);
-  useEffect(() => {
-    userRef.current = user;
-    subscriptionRef.current = hasActiveSubscription;
-    canConvertRef.current = canConvert;
-  }, [user, hasActiveSubscription, canConvert]);
-
   const { toast } = useToast();
 
   // Real-time audio engine hook
@@ -78,31 +65,6 @@ export function AudioProcessor({
       if (useRealTimeEngine) {
         setCurrentTime(time);
         setDuration(dur);
-
-        // Check preview limits - use refs to get current values
-        const currentUser = userRef.current;
-        const currentSubscription = subscriptionRef.current;
-        const currentCanConvert = canConvertRef.current;
-
-        // Not signed in - 30s preview then auth modal
-        if (!currentUser && time >= 30) {
-          audioEngine.pause();
-          setShowAuthModal(true);
-          toast({
-            title: "Sign In to Continue Listening",
-            description: "Sign in to get one free full track.",
-          });
-        }
-        // Signed in but no subscription AND no free conversions left - 30s preview then upgrade
-        else if (currentUser && !currentSubscription && !currentCanConvert && time >= 30) {
-          audioEngine.pause();
-          router.push('/dashboard/upgrade');
-          toast({
-            title: "30-Second Preview Complete",
-            description: "Upgrade to Pro for unlimited full-length audio.",
-          });
-        }
-        // Signed in with free conversion available OR subscription - full access (no limit check)
       }
     },
     onStateChange: (state) => {
@@ -118,9 +80,6 @@ export function AudioProcessor({
       });
     },
   });
-
-  // Check subscription status
-  const isSubscribed = hasActiveSubscription;
 
   // Initialize audio context
   useEffect(() => {
@@ -316,14 +275,8 @@ export function AudioProcessor({
       // Set duration
       setDuration(bufferToPlay.duration);
 
-      // For non-subscribers (including non-signed users), use preview buffer
-      let playBuffer = bufferToPlay;
-      if (!isSubscribed) {
-        playBuffer = createPreviewWithFade(bufferToPlay, PREVIEW_DURATION);
-      }
-
       sourceNodeRef.current = audioContextRef.current.createBufferSource();
-      sourceNodeRef.current.buffer = playBuffer;
+      sourceNodeRef.current.buffer = bufferToPlay;
       sourceNodeRef.current.connect(audioContextRef.current.destination);
       sourceNodeRef.current.onended = () => {
         setIsPlaying(false);
@@ -366,13 +319,8 @@ export function AudioProcessor({
         const bufferToPlay = processedBuffer;
         if (!bufferToPlay) return;
 
-        let playBuffer = bufferToPlay;
-        if (!isSubscribed) {
-          playBuffer = createPreviewWithFade(bufferToPlay, PREVIEW_DURATION);
-        }
-
         sourceNodeRef.current = audioContextRef.current.createBufferSource();
-        sourceNodeRef.current.buffer = playBuffer;
+        sourceNodeRef.current.buffer = bufferToPlay;
         sourceNodeRef.current.connect(audioContextRef.current.destination);
         sourceNodeRef.current.onended = () => {
           setIsPlaying(false);
@@ -402,34 +350,6 @@ export function AudioProcessor({
     const elapsed = audioContextRef.current.currentTime - startTimeRef.current;
     setCurrentTime(elapsed);
 
-    // Use refs to get current values
-    const currentUser = userRef.current;
-    const currentSubscription = subscriptionRef.current;
-    const currentCanConvert = canConvertRef.current;
-
-    // Not signed in - 30s preview then auth modal
-    if (!currentUser && elapsed >= 30) {
-      cleanup();
-      setShowAuthModal(true);
-      toast({
-        title: "Sign In to Continue Listening",
-        description: "Sign in to get one free full track.",
-      });
-      return;
-    }
-
-    // Signed in but no subscription AND no free conversions left - 30s preview then upgrade
-    if (currentUser && !currentSubscription && !currentCanConvert && elapsed >= 30) {
-      cleanup();
-      router.push('/dashboard/upgrade');
-      toast({
-        title: "30-Second Preview Complete",
-        description: "Upgrade to Pro for unlimited full-length audio.",
-      });
-      return;
-    }
-    // Signed in with free conversion available OR subscription - full access (no limit check)
-
     animationFrameRef.current = requestAnimationFrame(updatePlaybackTime);
   };
 
@@ -439,15 +359,6 @@ export function AudioProcessor({
       toast({
         title: "Sign in to download",
         description: "Create a free account to download your audio.",
-      });
-      return;
-    }
-
-    if (!isSubscribed) {
-      router.push('/dashboard/upgrade');
-      toast({
-        title: "Premium feature",
-        description: "Upgrade to Pro to download your audio.",
       });
       return;
     }
@@ -620,21 +531,6 @@ export function AudioProcessor({
         {/* Completed state - Player controls */}
         {isComplete && (
           <div className="space-y-3 sm:space-y-4 animate-fade-in">
-            {/* Preview notice for non-subscribers */}
-            {!isSubscribed && (
-              <div className="flex items-center justify-center gap-2 p-2 sm:p-3 rounded-xl bg-accent/10 border border-accent/20">
-                <Lock className="w-3 h-3 sm:w-4 sm:h-4 text-accent flex-shrink-0" />
-                <p className="text-xs sm:text-sm text-accent font-medium text-center">
-                  {user
-                    ? canConvert
-                      ? "Using your 1 free conversion • Next track requires Pro"
-                      : "Free conversion used • Subscribe for unlimited access"
-                    : "Free Preview: 30 seconds • Sign in for 1 free full track"
-                  }
-                </p>
-              </div>
-            )}
-
             {/* Audio Player */}
             <div className="space-y-3 sm:space-y-4">
               {/* Time and Progress Slider */}
@@ -712,7 +608,7 @@ export function AudioProcessor({
                   onClick={handleDownload}
                   className="gap-2 w-full sm:w-auto"
                 >
-                  {!isSubscribed && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
+                  {!user && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
                   <Download className="w-4 h-4 sm:w-5 sm:h-5" />
                   Download
                 </Button>
@@ -721,13 +617,9 @@ export function AudioProcessor({
 
             {/* Benefit reminder */}
             <p className="text-center text-xs sm:text-sm text-accent mt-3 sm:mt-4">
-              {isSubscribed
-                ? 'Enjoy Your Premium Neural-Optimized Audio'
-                : user
-                  ? canConvert
-                    ? 'Enjoying Your Free Conversion • Upgrade for Unlimited Access'
-                    : 'Free Conversion Used • Upgrade to Pro for Unlimited Audio'
-                  : 'Sign In After 30s Preview for 1 Free Full Track'
+              {user
+                ? 'Signed in: you can download your processed track.'
+                : 'Sign in to download your processed track.'
               }
             </p>
           </div>
@@ -738,8 +630,7 @@ export function AudioProcessor({
           open={showAuthModal}
           onClose={() => {
             setShowAuthModal(false);
-            // If user just signed up and has free conversion available, resume playback
-            if (user && !hasActiveSubscription && canConvert) {
+            if (user) {
               // Small delay to ensure auth state is updated
               setTimeout(() => {
                 if (useRealTimeEngine) {
@@ -749,8 +640,8 @@ export function AudioProcessor({
             }
           }}
           mode="signup"
-          title="Sign In to Continue Listening"
-          description="Sign in to play the full track and save your music."
+          title="Sign In to Download"
+          description="Sign in to download and save your music."
         />
       </div>
     </div>

@@ -61,98 +61,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [freeConversionsUsed, setFreeConversionsUsed] = useState(0);
   const [authError, setAuthError] = useState<string | null>(null);
 
-  const canConvert = hasActiveSubscription || freeConversionsUsed < 1;
+  const canConvert = true;
 
   const incrementFreeConversion = async () => {
-    // Free conversion is account-scoped; guest previews should not consume it.
-    if (hasActiveSubscription || !user) {
-      return;
-    }
-
-    const newCount = freeConversionsUsed + 1;
-    setFreeConversionsUsed(newCount);
-
-    // Store in database for signed-in users
-    try {
-      const { error } = await supabase
-        .from('user_profiles')
-        .upsert({
-          user_id: user.id,
-          email: user.email,
-          free_conversions_used: newCount,
-          updated_at: new Date().toISOString(),
-        }, {
-          onConflict: 'user_id'
-        });
-
-      if (error) {
-        console.error('Error updating free conversions:', error);
-        // Fallback to localStorage
-        localStorage.setItem(`free_conversions_${user.id}`, newCount.toString());
-      }
-    } catch (error) {
-      console.error('Error updating free conversions:', error);
-      // Fallback to localStorage
-      localStorage.setItem(`free_conversions_${user.id}`, newCount.toString());
-    }
+    // Upload conversions are now unlimited for all users.
+    return Promise.resolve();
   };
 
   const checkSubscription = async () => {
     if (!user) {
-      // Guest user previews are always allowed, but do not consume account conversions.
-      localStorage.removeItem('free_conversions_guest');
       setFreeConversionsUsed(0);
       setHasActiveSubscription(false);
       setSubscriptionPlan('free');
       return;
     }
 
-    // Signed-in user - load from database first, fallback to localStorage
-    try {
-      // Check for free conversions in database
-      const { data: profileData, error: profileError } = await supabase
-        .from('user_profiles')
-        .select('free_conversions_used')
-        .eq('user_id', user.id)
-        .single();
-
-      if (!profileError && profileData) {
-        setFreeConversionsUsed(profileData.free_conversions_used || 0);
-      } else {
-        // No profile yet - fallback to user-specific local cache only.
-        const userConversions = localStorage.getItem(`free_conversions_${user.id}`);
-
-        let conversionsUsed = 0;
-        if (userConversions) {
-          const parsed = parseInt(userConversions, 10);
-          conversionsUsed = Number.isFinite(parsed) ? parsed : 0;
-        }
-
-        setFreeConversionsUsed(conversionsUsed);
-
-        // Create profile in database
-        await supabase
-          .from('user_profiles')
-          .upsert({
-            user_id: user.id,
-            email: user.email,
-            free_conversions_used: conversionsUsed,
-          }, {
-            onConflict: 'user_id'
-          });
-      }
-    } catch (error) {
-      console.error('Error loading free conversions:', error);
-      // Fallback to localStorage
-      const userConversions = localStorage.getItem(`free_conversions_${user.id}`);
-
-      if (userConversions) {
-        const parsed = parseInt(userConversions, 10);
-        setFreeConversionsUsed(Number.isFinite(parsed) ? parsed : 0);
-      } else {
-        setFreeConversionsUsed(0);
-      }
-    }
+    // Legacy free-conversion counter is no longer used.
+    setFreeConversionsUsed(0);
 
     try {
       const { data, error } = await supabase

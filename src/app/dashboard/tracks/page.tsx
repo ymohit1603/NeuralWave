@@ -9,7 +9,6 @@ import { Badge } from "@/components/ui/badge";
 import { useSavedTracks } from "@/hooks/useSavedTracks";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { PaywallModal } from "@/components/PaywallModal";
 import { exportAsWAV } from "@/lib/audioProcessor";
 
 // Helper function to format relative time
@@ -55,9 +54,8 @@ export default function TracksPage() {
   const router = useRouter();
   const { tracks, isLoading, deleteTrack, getTrackAudioBuffer } = useSavedTracks();
   const { toast } = useToast();
-  const { hasActiveSubscription } = useAuth();
+  const { user } = useAuth();
   const [loadingTrackId, setLoadingTrackId] = useState<string | null>(null);
-  const [showPaywall, setShowPaywall] = useState(false);
 
   const handlePlay = (trackId: string) => {
     // Navigate to dashboard with track ID to load and play
@@ -65,11 +63,10 @@ export default function TracksPage() {
   };
 
   const handleDownload = async (trackId: string, title: string) => {
-    if (!hasActiveSubscription) {
-      setShowPaywall(true);
+    if (!user) {
       toast({
-        title: "Premium feature",
-        description: "Subscribe to download your neural-optimized audio.",
+        title: "Sign in required",
+        description: "Please sign in to download your audio.",
       });
       return;
     }
@@ -249,13 +246,6 @@ export default function TracksPage() {
           )}
         </div>
       </main>
-
-      {/* Paywall Modal */}
-      <PaywallModal
-        open={showPaywall}
-        onClose={() => setShowPaywall(false)}
-        mode="preview-limit"
-      />
     </div>
   );
 }

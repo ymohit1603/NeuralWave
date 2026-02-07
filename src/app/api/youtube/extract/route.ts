@@ -13,11 +13,16 @@ const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
 const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.mp4', '.webm', '.opus'] as const;
 const ERROR_LOG_SNIPPET_LENGTH = 800;
-const EXTRACTION_PIPELINE_VERSION = 'youtubei-piped-cobalt-embed-v5-2026-02-07';
+const EXTRACTION_PIPELINE_VERSION = 'youtubei-piped-cobalt-embed-v6-2026-02-07';
 const YOUTUBEI_PLAYER_ENDPOINT = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const YOUTUBE_EMBED_ENDPOINT = 'https://www.youtube.com/embed';
 const PIPED_INSTANCES_ENDPOINT = 'https://piped-instances.kavin.rocks/';
-const DEFAULT_PIPED_APIS = ['https://api.piped.private.coffee'] as const;
+const DEFAULT_PIPED_APIS = [
+  'https://api.piped.private.coffee',
+  'https://pipedapi.kavin.rocks',
+  'https://pipedapi.drgns.space',
+  'https://api.piped.projectsegfau.lt',
+] as const;
 const DEFAULT_COBALT_APIS = ['https://api.cobalt.tools'] as const;
 const YT_DLP_BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 const YT_DLP_ASSET_CANDIDATES = (() => {
@@ -50,6 +55,26 @@ type YtDlpRunner = (
 
 let ytDlpRunnerPromise: Promise<YtDlpRunner> | null = null;
 
+interface YouTubeiClientProfile {
+  label: string;
+  userAgent: string;
+  client: {
+    clientName: string;
+    clientVersion: string;
+    hl: string;
+    gl: string;
+    androidSdkVersion?: number;
+  };
+  playbackContext?: {
+    contentPlaybackContext?: {
+      signatureTimestamp?: number;
+    };
+  };
+  thirdParty?: {
+    embedUrl: string;
+  };
+}
+
 const YOUTUBEI_CLIENTS = [
   {
     label: 'android',
@@ -63,6 +88,24 @@ const YOUTUBEI_CLIENTS = [
     },
   },
   {
+    label: 'web-embedded',
+    userAgent: 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/133.0.0.0 Safari/537.36',
+    client: {
+      clientName: 'WEB_EMBEDDED_PLAYER',
+      clientVersion: '1.20250206.00.00',
+      hl: 'en',
+      gl: 'US',
+    },
+    playbackContext: {
+      contentPlaybackContext: {
+        signatureTimestamp: 19369,
+      },
+    },
+    thirdParty: {
+      embedUrl: 'https://www.youtube.com',
+    },
+  },
+  {
     label: 'ios',
     userAgent: 'com.google.ios.youtube/20.10.4 (iPhone16,2; U; CPU iOS 18_3 like Mac OS X)',
     client: {
@@ -72,7 +115,7 @@ const YOUTUBEI_CLIENTS = [
       gl: 'US',
     },
   },
-] as const;
+] as const satisfies readonly YouTubeiClientProfile[];
 
 interface VideoInfo {
   title: string;
@@ -843,7 +886,7 @@ async function getYouTubeiClientStreamCandidates(
 async function fetchYouTubeiPlayerResponse(
   videoId: string,
   watchUrl: string,
-  client: (typeof YOUTUBEI_CLIENTS)[number]
+  client: YouTubeiClientProfile
 ): Promise<YouTubeiPlayerResponse> {
   const response = await fetch(YOUTUBEI_PLAYER_ENDPOINT, {
     method: 'POST',
@@ -856,6 +899,8 @@ async function fetchYouTubeiPlayerResponse(
     body: JSON.stringify({
       context: {
         client: client.client,
+        ...(client.playbackContext ? { playbackContext: client.playbackContext } : {}),
+        ...(client.thirdParty ? { thirdParty: client.thirdParty } : {}),
       },
       videoId,
     }),
@@ -1069,17 +1114,27 @@ async function tryDownloadWithCobalt(
 
   const cobaltApiKey = process.env.COBALT_API_KEY?.trim();
   const cobaltBearer = process.env.COBALT_BEARER_TOKEN?.trim();
+  const rawAuthorizationHeader = process.env.COBALT_AUTHORIZATION?.trim();
 
   for (const api of apis) {
     const endpoint = `${api.replace(/\/+$/, '')}/`;
     try {
+      if (!cobaltApiKey && !cobaltBearer && !rawAuthorizationHeader && endpoint.includes('api.cobalt.tools/')) {
+        console.warn(
+          '[Server] Cobalt strategy skipped (https://api.cobalt.tools requires auth token; set COBALT_API_KEY, COBALT_BEARER_TOKEN, or COBALT_AUTHORIZATION)'
+        );
+        continue;
+      }
+
       console.log(`[Server] Cobalt strategy: ${endpoint}`);
       const headers: Record<string, string> = {
         Accept: 'application/json',
         'Content-Type': 'application/json',
       };
 
-      if (cobaltApiKey) {
+      if (rawAuthorizationHeader) {
+        headers.Authorization = rawAuthorizationHeader;
+      } else if (cobaltApiKey) {
         headers.Authorization = `Api-Key ${cobaltApiKey}`;
       } else if (cobaltBearer) {
         headers.Authorization = `Bearer ${cobaltBearer}`;
@@ -1138,6 +1193,48 @@ async function tryDownloadFromEmbedPlayer(
   watchUrl: string,
   outputTemplate: string
 ): Promise<string | null> {
+  try {
+    const embeddedClient = YOUTUBEI_CLIENTS.find((client) => client.label === 'web-embedded');
+    if (embeddedClient) {
+      console.log('[Server] Embed player YouTubei strategy: web-embedded');
+      const playerResponse = await fetchYouTubeiPlayerResponse(videoId, watchUrl, embeddedClient);
+      const playabilityStatus = playerResponse.playabilityStatus?.status || 'UNKNOWN';
+      if (playabilityStatus === 'OK') {
+        const candidates = extractYouTubeiStreamCandidates(playerResponse, 'youtube-embed-youtubei');
+        if (candidates.length > 0) {
+          console.log(`[Server] Embed YouTubei returned ${candidates.length} candidates`);
+          for (const candidate of candidates) {
+            try {
+              const outputFile = await downloadFromDirectUrl(candidate.url, outputTemplate, {
+                watchUrl,
+                userAgent: embeddedClient.userAgent,
+                preferredExtension: candidate.ext,
+                sourceLabel: 'youtube-embed-youtubei',
+              });
+              console.log(`[Server] Embed YouTubei download success (itag=${candidate.formatId})`);
+              return outputFile;
+            } catch (candidateError) {
+              if (candidateError instanceof ApiError) throw candidateError;
+              console.warn(
+                `[Server] Embed YouTubei candidate failed (itag=${candidate.formatId}) | ${getErrorSnippet(getErrorText(candidateError))}`
+              );
+            }
+          }
+        } else {
+          console.warn('[Server] Embed YouTubei returned no candidates');
+        }
+      } else {
+        const reason = playerResponse.playabilityStatus?.reason || '';
+        console.warn(
+          `[Server] Embed YouTubei not playable: ${playabilityStatus}${reason ? ` - ${reason}` : ''}`
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.warn(`[Server] Embed YouTubei strategy failed | ${getErrorSnippet(getErrorText(error))}`);
+  }
+
   const embedUrl = `${YOUTUBE_EMBED_ENDPOINT}/${videoId}?autoplay=1&mute=1&hl=en`;
   try {
     console.log(`[Server] Embed player strategy: ${embedUrl}`);

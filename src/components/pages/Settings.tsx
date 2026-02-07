@@ -24,7 +24,7 @@ import {
 export default function Settings() {
   const router = useRouter();
   const { preferences, updatePreferences, resetPreferences } = useUserPreferences();
-  const { user, hasActiveSubscription, subscriptionPlan, signOut, freeConversionsUsed } = useAuth();
+  const { user, hasActiveSubscription, subscriptionPlan, signOut } = useAuth();
   const { tracks, clearAllTracks } = useSavedTracks();
   const { toast } = useToast();
   const [showDeleteDialog, setShowDeleteDialog] = useState(false);
@@ -148,7 +148,7 @@ export default function Settings() {
                 <div>
                   <p className="font-medium">Current Plan</p>
                   <p className="text-sm text-muted-foreground">
-                    {hasActiveSubscription ? 'Full access to all features' : 'Limited to 30-second previews'}
+                    {hasActiveSubscription ? 'Full access to all features' : 'Unlimited upload conversions. Search conversion requires Pro.'}
                   </p>
                 </div>
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${
@@ -161,20 +161,13 @@ export default function Settings() {
               </div>
 
               {!hasActiveSubscription && (
-                <>
-                  <div className="p-3 rounded-lg bg-muted/50 mb-4">
-                    <p className="text-sm text-muted-foreground">
-                      Free conversions used: <span className="font-medium text-foreground">{freeConversionsUsed}/1</span>
-                    </p>
-                  </div>
-                  <Button
-                    variant="neural"
-                    className="w-full"
-                    onClick={() => router.push('/dashboard/upgrade')}
-                  >
-                    Upgrade to Pro
-                  </Button>
-                </>
+                <Button
+                  variant="neural"
+                  className="w-full"
+                  onClick={() => router.push('/dashboard/upgrade')}
+                >
+                  Upgrade to Pro
+                </Button>
               )}
 
               {hasActiveSubscription && subscriptionPlan !== 'lifetime' && (

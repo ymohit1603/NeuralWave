@@ -78,7 +78,7 @@ async function searchWithInvidious(query: string): Promise<YouTubeSearchResult[]
     return await searchWithYouTubeSuggestions(query);
   } catch (error) {
     console.error('All search methods failed:', errors);
-    throw new Error('Search temporarily unavailable. Please try again or paste a YouTube URL directly.');
+    throw new Error('Search temporarily unavailable. Please try again in a few moments.');
   }
 }
 

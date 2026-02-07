@@ -1,7 +1,7 @@
 'use client';
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Upload, Search, Link, Music, X, Play, Pause, Loader2, AlertCircle, Clock, Eye } from "lucide-react";
+import { Upload, Search, Music, Loader2, AlertCircle, Clock, Eye, Lock } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -19,25 +19,15 @@ export interface SearchResult {
 
 interface AudioUploaderProps {
   onFileSelect: (file: File) => void;
-  onUrlSubmit: (url: string) => void;
   onSearch: (query: string) => void;
   onSearchResultSelect?: (result: SearchResult) => void;
   onAudioReady?: (audioBuffer: AudioBuffer, fileName: string) => void;
   onProcessStart?: () => void;
   isLoadingYouTube?: boolean;
   youtubeProgress?: { stage: string; progress: number } | null;
-  youtubeThumbnail?: string | null;
-  youtubeVideoInfo?: {title: string; author: string} | null;
   searchResults?: SearchResult[];
   isSearching?: boolean;
-}
-
-interface AudioMetadata {
-  fileName: string;
-  fileSize: number;
-  duration: number;
-  sampleRate: number;
-  numberOfChannels: number;
+  hasActiveSubscription?: boolean;
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
@@ -45,34 +35,26 @@ const ACCEPTED_FORMATS = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav',
 
 export function AudioUploader({
   onFileSelect,
-  onUrlSubmit,
   onSearch,
   onSearchResultSelect,
   onAudioReady,
   onProcessStart,
   isLoadingYouTube = false,
   youtubeProgress = null,
-  youtubeThumbnail = null,
-  youtubeVideoInfo = null,
   searchResults = [],
   isSearching = false,
+  hasActiveSubscription = false,
 }: AudioUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
-  const [urlInput, setUrlInput] = useState("");
+  const [searchSuggestions, setSearchSuggestions] = useState<string[]>([]);
+  const [showSuggestions, setShowSuggestions] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [audioBuffer, setAudioBuffer] = useState<AudioBuffer | null>(null);
-  const [metadata, setMetadata] = useState<AudioMetadata | null>(null);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [showPreview, setShowPreview] = useState(false);
   const [selectedSearchResult, setSelectedSearchResult] = useState<SearchResult | null>(null);
   const [hasSearched, setHasSearched] = useState(false);
-  
+
   const audioContextRef = useRef<AudioContext | null>(null);
-  const sourceNodeRef = useRef<AudioBufferSourceNode | null>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationFrameRef = useRef<number | null>(null);
   const { toast } = useToast();
   const youtubeProgressValue = Math.max(
     0,
@@ -87,30 +69,53 @@ export function AudioUploader({
     if (!audioContextRef.current) {
       audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     }
-    
+
     return () => {
-      cleanup();
+      if (audioContextRef.current) {
+        void audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
     };
   }, []);
 
-  // Draw waveform when audio buffer is ready
+  // Debounced autocomplete (Google/YouTube suggestions)
   useEffect(() => {
-    if (audioBuffer && canvasRef.current) {
-      drawWaveform(audioBuffer);
-    }
-  }, [audioBuffer]);
+    const trimmedQuery = searchQuery.trim();
 
-  const cleanup = () => {
-    if (sourceNodeRef.current) {
-      sourceNodeRef.current.stop();
-      sourceNodeRef.current.disconnect();
-      sourceNodeRef.current = null;
+    if (trimmedQuery.length < 2) {
+      setSearchSuggestions([]);
+      return;
     }
-    if (animationFrameRef.current) {
-      cancelAnimationFrame(animationFrameRef.current);
-    }
-    setIsPlaying(false);
-  };
+
+    const controller = new AbortController();
+    const timeoutId = window.setTimeout(async () => {
+      try {
+        const response = await fetch(`/api/youtube/autocomplete?q=${encodeURIComponent(trimmedQuery)}`, {
+          signal: controller.signal,
+        });
+
+        if (!response.ok) {
+          setSearchSuggestions([]);
+          return;
+        }
+
+        const data = await response.json();
+        const suggestions = Array.isArray(data?.suggestions)
+          ? data.suggestions.filter((item: unknown): item is string => typeof item === 'string')
+          : [];
+        setSearchSuggestions(suggestions.slice(0, 8));
+      } catch (err) {
+        if ((err as Error).name !== 'AbortError') {
+          setSearchSuggestions([]);
+        }
+      }
+    }, 250);
+
+    return () => {
+      controller.abort();
+      window.clearTimeout(timeoutId);
+    };
+  }, [searchQuery]);
 
   const validateFile = (file: File): string | null => {
     if (!ACCEPTED_FORMATS.includes(file.type) && !file.name.match(/\.(mp3|wav)$/i)) {
@@ -125,47 +130,32 @@ export function AudioUploader({
   const processAudioFile = async (file: File) => {
     setIsLoading(true);
     setError(null);
-    
+
     try {
-      // Read file as ArrayBuffer
       const arrayBuffer = await file.arrayBuffer();
-      
-      // Decode audio data
+
       if (!audioContextRef.current) {
         audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
       }
-      
+
       const decodedBuffer = await audioContextRef.current.decodeAudioData(arrayBuffer);
-      
-      // Store audio buffer and metadata
-      setAudioBuffer(decodedBuffer);
-      setMetadata({
-        fileName: file.name,
-        fileSize: file.size,
-        duration: decodedBuffer.duration,
-        sampleRate: decodedBuffer.sampleRate,
-        numberOfChannels: decodedBuffer.numberOfChannels,
-      });
-      
-      setShowPreview(true);
-      
-      // Notify parent component
+
       if (onAudioReady) {
         onAudioReady(decodedBuffer, file.name);
       }
-      
+
       toast({
         title: "Audio loaded successfully!",
         description: `${file.name} is ready for processing.`,
       });
-      
+
       // Auto-start processing immediately
       setTimeout(() => {
         if (onProcessStart) {
           onProcessStart();
         }
-      }, 500);
-      
+      }, 150);
+
     } catch (err) {
       console.error("Error processing audio:", err);
       setError("Failed to decode audio file. The file may be corrupted or in an unsupported format.");
@@ -176,58 +166,6 @@ export function AudioUploader({
       });
     } finally {
       setIsLoading(false);
-    }
-  };
-
-  const drawWaveform = (buffer: AudioBuffer) => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-    
-    const width = canvas.width;
-    const height = canvas.height;
-    const data = buffer.getChannelData(0);
-    const step = Math.ceil(data.length / width);
-    const amp = height / 2;
-    
-    ctx.fillStyle = 'rgba(0, 0, 0, 0)';
-    ctx.clearRect(0, 0, width, height);
-    
-    // Draw waveform bars
-    ctx.fillStyle = 'rgba(139, 92, 246, 0.6)';
-    
-    for (let i = 0; i < width; i++) {
-      let min = 1.0;
-      let max = -1.0;
-      
-      for (let j = 0; j < step; j++) {
-        const datum = data[(i * step) + j];
-        if (datum < min) min = datum;
-        if (datum > max) max = datum;
-      }
-      
-      const barHeight = Math.max(1, (max - min) * amp);
-      const y = (1 + min) * amp;
-      
-      ctx.fillRect(i * 2, y, 1.5, barHeight);
-    }
-  };
-
-  const togglePlayback = () => {
-    if (!audioBuffer || !audioContextRef.current) return;
-    
-    if (isPlaying) {
-      cleanup();
-    } else {
-      // Create new source node
-      sourceNodeRef.current = audioContextRef.current.createBufferSource();
-      sourceNodeRef.current.buffer = audioBuffer;
-      sourceNodeRef.current.connect(audioContextRef.current.destination);
-      sourceNodeRef.current.onended = () => setIsPlaying(false);
-      sourceNodeRef.current.start(0);
-      setIsPlaying(true);
     }
   };
 
@@ -245,12 +183,12 @@ export function AudioUploader({
     e.preventDefault();
     e.stopPropagation();
     setIsDragging(false);
-    
+
     const files = e.dataTransfer.files;
     if (files?.[0]) {
       const file = files[0];
       const validationError = validateFile(file);
-      
+
       if (validationError) {
         setError(validationError);
         toast({
@@ -260,7 +198,7 @@ export function AudioUploader({
         });
         return;
       }
-      
+
       onFileSelect(file);
       processAudioFile(file);
     }
@@ -291,84 +229,144 @@ export function AudioUploader({
     e.preventDefault();
     if (searchQuery.trim()) {
       setHasSearched(true);
+      setShowSuggestions(false);
       onSearch(searchQuery.trim());
     }
   };
 
+  const handleSuggestionSelect = (suggestion: string) => {
+    setSearchQuery(suggestion);
+    setHasSearched(true);
+    setShowSuggestions(false);
+    onSearch(suggestion);
+  };
+
   const handleSearchResultClick = (result: SearchResult) => {
     setSelectedSearchResult(result);
+    setShowSuggestions(false);
     if (onSearchResultSelect) {
       onSearchResultSelect(result);
     }
   };
 
-  const handleUrlSubmit = (e: React.FormEvent) => {
-    e.preventDefault();
-    if (urlInput.trim()) {
-      onUrlSubmit(urlInput);
-    }
-  };
-
-  const handleReset = () => {
-    cleanup();
-    setAudioBuffer(null);
-    setMetadata(null);
-    setShowPreview(false);
-    setError(null);
-  };
-
-  const formatDuration = (seconds: number): string => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const formatFileSize = (bytes: number): string => {
-    return (bytes / 1024 / 1024).toFixed(2) + ' MB';
-  };
-
   return (
     <div className="w-full max-w-full overflow-hidden">
-      <Tabs defaultValue="search" className="w-full">
-        <TabsList className="grid w-full grid-cols-3 bg-secondary/50 p-1 rounded-xl mb-4 sm:mb-6">
+      <Tabs defaultValue="upload" className="w-full">
+        <TabsList className="grid w-full grid-cols-2 bg-secondary/50 p-1 rounded-xl mb-4 sm:mb-6">
           <TabsTrigger
-            value="search"
-            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
-          >
-            <Search className="w-3 h-3 sm:w-4 sm:h-4" />
-            <span className="hidden xs:inline">Search</span>
-          </TabsTrigger>
-          <TabsTrigger 
             value="upload"
             className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
           >
             <Upload className="w-3 h-3 sm:w-4 sm:h-4" />
             <span className="hidden xs:inline">Upload</span>
           </TabsTrigger>
-          <TabsTrigger 
-            value="url"
-            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg relative text-xs sm:text-sm px-2 sm:px-3"
+          <TabsTrigger
+            value="search"
+            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
           >
-            <Link className="w-3 h-3 sm:w-4 sm:h-4" />
-            <span className="hidden xs:inline">YouTube</span>
+            <Search className="w-3 h-3 sm:w-4 sm:h-4" />
+            <span className="hidden xs:inline">Search</span>
+            {!hasActiveSubscription && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
           </TabsTrigger>
         </TabsList>
+
+        {/* Upload Tab */}
+        <TabsContent value="upload" className="mt-0">
+          {error && (
+            <Alert variant="destructive" className="mb-4">
+              <AlertCircle className="h-4 w-4" />
+              <AlertDescription>{error}</AlertDescription>
+            </Alert>
+          )}
+
+          {isLoading ? (
+            <div className="flex flex-col items-center justify-center p-12 rounded-2xl glass-card border border-primary/20">
+              <Loader2 className="w-12 h-12 text-primary animate-spin mb-4" />
+              <p className="text-lg font-medium mb-1">Processing audio file...</p>
+              <p className="text-sm text-muted-foreground">Decoding audio data</p>
+            </div>
+          ) : (
+            <div
+              onDragEnter={handleDrag}
+              onDragLeave={handleDrag}
+              onDragOver={handleDrag}
+              onDrop={handleDrop}
+              className={`relative flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer ${
+                isDragging
+                  ? 'border-primary bg-primary/10 scale-[1.02]'
+                  : 'border-primary/30 hover:border-primary/60 hover:bg-primary/5'
+              }`}
+            >
+              <input
+                type="file"
+                accept="audio/*"
+                onChange={handleFileInput}
+                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
+              />
+
+              <div className={`p-4 rounded-2xl glass-card border border-primary/20 mb-4 transition-all duration-300 ${
+                isDragging ? 'scale-110 shadow-lg shadow-primary/20' : ''
+              }`}>
+                <Upload className="w-8 h-8 text-primary" />
+              </div>
+
+              <p className="text-lg font-medium mb-1">
+                {isDragging ? "Drop your file here" : "Drag & drop your audio file"}
+              </p>
+              <p className="text-sm text-muted-foreground mb-4">
+                or click to browse � MP3, WAV, M4A supported
+              </p>
+
+              <Button variant="outline" className="pointer-events-none">
+                Choose File
+              </Button>
+            </div>
+          )}
+        </TabsContent>
 
         {/* Search Tab */}
         <TabsContent value="search" className="mt-0">
           <div className="space-y-4">
+            {!hasActiveSubscription && (
+              <div className="flex items-center justify-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
+                <Lock className="w-4 h-4 text-amber-600" />
+                <p className="text-xs sm:text-sm text-amber-700 dark:text-amber-400">
+                  Search works for everyone. Converting search results requires Pro.
+                </p>
+              </div>
+            )}
+
             {/* Search Input */}
-            <form onSubmit={handleSearchSubmit} className="flex gap-2 sm:gap-3">
+            <form onSubmit={handleSearchSubmit} className="flex gap-2 sm:gap-3 items-start">
               <div className="relative flex-1">
                 <Search className="absolute left-3 top-1/2 -translate-y-1/2 w-4 h-4 sm:w-5 sm:h-5 text-muted-foreground" />
                 <Input
                   type="text"
                   placeholder="Search for songs, artists..."
                   value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
+                  onChange={(e) => {
+                    setSearchQuery(e.target.value);
+                    setShowSuggestions(true);
+                  }}
+                  onFocus={() => setShowSuggestions(true)}
                   disabled={isSearching || isLoadingYouTube}
                   className="pl-9 sm:pl-11 h-12 sm:h-14 text-sm sm:text-lg bg-secondary/30 border-primary/20 focus:border-primary rounded-xl"
                 />
+
+                {showSuggestions && searchSuggestions.length > 0 && (
+                  <div className="absolute top-full left-0 right-0 mt-1 z-20 rounded-xl border border-primary/20 bg-background shadow-lg overflow-hidden">
+                    {searchSuggestions.map((suggestion) => (
+                      <button
+                        key={suggestion}
+                        type="button"
+                        onClick={() => handleSuggestionSelect(suggestion)}
+                        className="w-full px-3 py-2.5 text-left text-sm hover:bg-secondary/40 transition-colors"
+                      >
+                        {suggestion}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
               <Button
                 type="submit"
@@ -448,7 +446,7 @@ export function AudioUploader({
                         ? 'bg-primary text-primary-foreground'
                         : 'bg-secondary/50 text-muted-foreground'
                     }`}>
-                      <Play className="w-3 h-3 sm:w-4 sm:h-4" />
+                      <Music className="w-3 h-3 sm:w-4 sm:h-4" />
                     </div>
                   </button>
                 ))}
@@ -463,7 +461,7 @@ export function AudioUploader({
               <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
                 <Search className="w-8 h-8 sm:w-10 sm:h-10 text-primary mb-3 sm:mb-4" />
                 <p className="text-sm sm:text-base font-medium">Click the search button</p>
-                <p className="text-xs sm:text-sm text-muted-foreground text-center">Press the search button or hit Enter to find songs</p>
+                <p className="text-xs sm:text-sm text-muted-foreground text-center">Press search or select a suggestion</p>
               </div>
             ) : (
               <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
@@ -472,223 +470,11 @@ export function AudioUploader({
                 </div>
                 <h3 className="text-base sm:text-lg font-semibold mb-1 sm:mb-2">Search for Music</h3>
                 <p className="text-xs sm:text-sm text-muted-foreground text-center max-w-md">
-                  Search for any song on YouTube and convert it to 8D audio instantly
+                  Search songs on YouTube and pick one to convert.
                 </p>
               </div>
             )}
           </div>
-        </TabsContent>
-
-        {/* Upload Tab */}
-        <TabsContent value="upload" className="mt-0">
-          {error && (
-            <Alert variant="destructive" className="mb-4">
-              <AlertCircle className="h-4 w-4" />
-              <AlertDescription>{error}</AlertDescription>
-            </Alert>
-          )}
-          
-          {showPreview && metadata && audioBuffer ? (
-            <div className="space-y-4 animate-fade-in">
-              {/* Audio Preview Card */}
-              <div className="p-6 rounded-2xl glass-card border border-primary/20">
-                <div className="flex items-start gap-4 mb-4">
-                  <div className="p-4 rounded-xl bg-gradient-to-br from-primary to-accent">
-                    <Music className="w-6 h-6 text-white" />
-                  </div>
-                  <div className="flex-1">
-                    <p className="font-medium text-lg">{metadata.fileName}</p>
-                    <div className="flex flex-wrap gap-4 mt-2 text-sm text-muted-foreground">
-                      <span>Duration: {formatDuration(metadata.duration)}</span>
-                      <span>•</span>
-                      <span>Size: {formatFileSize(metadata.fileSize)}</span>
-                      <span>•</span>
-                      <span>Sample Rate: {metadata.sampleRate} Hz</span>
-                      <span>•</span>
-                      <span>{metadata.numberOfChannels === 2 ? 'Stereo' : 'Mono'}</span>
-                    </div>
-                  </div>
-                  <Button variant="ghost" size="icon" onClick={handleReset}>
-                    <X className="w-5 h-5" />
-                  </Button>
-                </div>
-                
-                {/* Waveform Visualization */}
-                <div className="relative mb-4 p-4 rounded-xl bg-secondary/30 border border-primary/10">
-                  <canvas
-                    ref={canvasRef}
-                    width={800}
-                    height={120}
-                    className="w-full h-[120px]"
-                  />
-                </div>
-                
-                {/* Playback Controls */}
-                <div className="flex items-center gap-3">
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onClick={togglePlayback}
-                    className="w-full gap-2"
-                  >
-                    {isPlaying ? (
-                      <>
-                        <Pause className="w-4 h-4" />
-                        Pause Preview
-                      </>
-                    ) : (
-                      <>
-                        <Play className="w-4 h-4" />
-                        Play Preview
-                      </>
-                    )}
-                  </Button>
-                </div>
-              </div>
-              
-              {/* Upload Different File Button */}
-              <Button
-                variant="outline"
-                onClick={handleReset}
-                className="w-full"
-              >
-                Upload Different File
-              </Button>
-            </div>
-          ) : isLoading ? (
-            <div className="flex flex-col items-center justify-center p-12 rounded-2xl glass-card border border-primary/20">
-              <Loader2 className="w-12 h-12 text-primary animate-spin mb-4" />
-              <p className="text-lg font-medium mb-1">Processing audio file...</p>
-              <p className="text-sm text-muted-foreground">Decoding audio data</p>
-            </div>
-          ) : (
-            <div
-              onDragEnter={handleDrag}
-              onDragLeave={handleDrag}
-              onDragOver={handleDrag}
-              onDrop={handleDrop}
-              className={`relative flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer ${
-                isDragging 
-                  ? 'border-primary bg-primary/10 scale-[1.02]' 
-                  : 'border-primary/30 hover:border-primary/60 hover:bg-primary/5'
-              }`}
-            >
-              <input
-                type="file"
-                accept="audio/*"
-                onChange={handleFileInput}
-                className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
-              />
-              
-              <div className={`p-4 rounded-2xl glass-card border border-primary/20 mb-4 transition-all duration-300 ${
-                isDragging ? 'scale-110 shadow-lg shadow-primary/20' : ''
-              }`}>
-                <Upload className="w-8 h-8 text-primary" />
-              </div>
-              
-              <p className="text-lg font-medium mb-1">
-                {isDragging ? "Drop your file here" : "Drag & drop your audio file"}
-              </p>
-              <p className="text-sm text-muted-foreground mb-4">
-                or click to browse • MP3, WAV, M4A supported
-              </p>
-              
-              <Button variant="outline" className="pointer-events-none">
-                Choose File
-              </Button>
-            </div>
-          )}
-        </TabsContent>
-
-        {/* URL Tab */}
-        <TabsContent value="url" className="mt-0">
-          <form onSubmit={handleUrlSubmit} className="space-y-4">
-            <div className="flex gap-3">
-              <Input
-                type="url"
-                placeholder="Paste YouTube URL here..."
-                value={urlInput}
-                onChange={(e) => setUrlInput(e.target.value)}
-                disabled={isLoadingYouTube}
-                className="flex-1 h-14 text-lg bg-secondary/30 border-primary/20 focus:border-primary rounded-xl"
-              />
-              <Button 
-                type="submit" 
-                variant="neural" 
-                size="lg" 
-                className="h-14 px-8"
-                disabled={isLoadingYouTube || !urlInput.trim()}
-              >
-                {isLoadingYouTube ? (
-                  <>
-                    <Loader2 className="w-5 h-5 mr-2 animate-spin" />
-                    Extracting...
-                  </>
-                ) : (
-                  <>
-                    <Link className="w-5 h-5 mr-2" />
-                    Import
-                  </>
-                )}
-              </Button>
-            </div>
-            <p className="text-sm text-muted-foreground text-center">
-              Paste a YouTube link and we'll extract the audio automatically
-            </p>
-            
-            {/* Loading State with Progress */}
-            {isLoadingYouTube && (
-              <div className="p-4 sm:p-6 rounded-xl glass-card border border-primary/20 animate-fade-in">
-                <div className="flex items-start gap-3 sm:gap-4">
-                  <div className="relative">
-                    <div className="w-10 h-10 sm:w-12 sm:h-12 rounded-full border-2 border-primary/30 border-t-primary animate-spin" />
-                    <div className="absolute inset-0 flex items-center justify-center">
-                      <Music className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
-                    </div>
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <p className="font-medium text-sm sm:text-base">
-                      {youtubeProgress?.stage || 'Extracting audio from YouTube...'}
-                    </p>
-                    <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-                      Please wait, this may take a moment
-                    </p>
-                    {/* Progress bar */}
-                    <div className="mt-3 h-2 bg-secondary rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-300 rounded-full"
-                        style={{ width: `${youtubeProgressValue}%` }}
-                      />
-                    </div>
-                    <p className="text-xs text-muted-foreground mt-1.5 text-right">
-                      {youtubeProgressLabel}%
-                    </p>
-                  </div>
-                </div>
-              </div>
-            )}
-            
-            {/* Thumbnail Preview */}
-            {youtubeThumbnail && youtubeVideoInfo && !isLoadingYouTube && (
-              <div className="p-4 rounded-xl glass-card border border-primary/20 animate-fade-in">
-                <div className="flex gap-4">
-                  <img 
-                    src={youtubeThumbnail} 
-                    alt={youtubeVideoInfo.title}
-                    className="w-32 h-24 object-cover rounded-lg"
-                  />
-                  <div className="flex-1">
-                    <h4 className="font-semibold line-clamp-2 mb-1">{youtubeVideoInfo.title}</h4>
-                    <p className="text-sm text-muted-foreground">{youtubeVideoInfo.author}</p>
-                    <div className="mt-2 flex items-center gap-2">
-                      <Loader2 className="w-4 h-4 text-primary animate-spin" />
-                      <span className="text-sm text-muted-foreground">Processing audio automatically...</span>
-                    </div>
-                  </div>
-                </div>
-              </div>
-            )}
-          </form>
         </TabsContent>
       </Tabs>
     </div>
