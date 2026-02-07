@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ytDlp from 'yt-dlp-exec';
+import { spawnSync } from 'child_process';
 import fs from 'fs';
 import os from 'os';
 import path from 'path';
@@ -13,10 +14,27 @@ const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
 const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.webm', '.opus'] as const;
 const ERROR_LOG_SNIPPET_LENGTH = 800;
 const YT_DLP_BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
-const YT_DLP_DOWNLOAD_URL =
-  process.platform === 'win32'
-    ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
-    : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+const YT_DLP_ASSET_CANDIDATES = (() => {
+  if (process.platform === 'win32') {
+    return process.arch === 'arm64'
+      ? ['yt-dlp_arm64.exe', 'yt-dlp.exe']
+      : ['yt-dlp.exe'];
+  }
+
+  if (process.platform === 'linux') {
+    if (process.arch === 'arm64') {
+      return ['yt-dlp_linux_aarch64', 'yt-dlp_linux', 'yt-dlp'];
+    }
+
+    return ['yt-dlp_linux', 'yt-dlp'];
+  }
+
+  if (process.platform === 'darwin') {
+    return ['yt-dlp_macos', 'yt-dlp_macos_legacy', 'yt-dlp'];
+  }
+
+  return ['yt-dlp'];
+})();
 
 type YtDlpRunner = (
   url: string,
@@ -105,6 +123,27 @@ function getErrorSnippet(message: string): string {
   return message.replace(/\s+/g, ' ').slice(0, ERROR_LOG_SNIPPET_LENGTH);
 }
 
+function hasExecutableOnPath(commandName: string): boolean {
+  const pathEntries = (process.env.PATH || '').split(path.delimiter).filter(Boolean);
+  const extensions = process.platform === 'win32'
+    ? (process.env.PATHEXT || '.EXE;.CMD;.BAT;.COM').split(';').filter(Boolean)
+    : [''];
+
+  for (const entry of pathEntries) {
+    for (const extension of extensions) {
+      const candidate = path.join(entry, process.platform === 'win32' ? `${commandName}${extension}` : commandName);
+      try {
+        fs.accessSync(candidate, fs.constants.X_OK);
+        return true;
+      } catch {
+        // Keep scanning PATH.
+      }
+    }
+  }
+
+  return false;
+}
+
 function isBinaryUsable(binaryPath: string): boolean {
   try {
     const mode = process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK;
@@ -113,6 +152,57 @@ function isBinaryUsable(binaryPath: string): boolean {
   } catch {
     return false;
   }
+}
+
+function isPythonShebang(binaryPath: string): boolean {
+  let fd: number | null = null;
+
+  try {
+    fd = fs.openSync(binaryPath, 'r');
+    const buffer = Buffer.alloc(128);
+    const bytesRead = fs.readSync(fd, buffer, 0, buffer.length, 0);
+    const head = buffer.toString('utf8', 0, bytesRead);
+    return /^#!.*python/i.test(head);
+  } catch {
+    return false;
+  } finally {
+    if (fd !== null) {
+      try {
+        fs.closeSync(fd);
+      } catch {
+        // Ignore descriptor cleanup failures.
+      }
+    }
+  }
+}
+
+function probeYtDlpBinary(binaryPath: string): { ok: true } | { ok: false; reason: string } {
+  if (!isBinaryUsable(binaryPath)) {
+    return { ok: false, reason: 'Binary is missing or not executable.' };
+  }
+
+  if (isPythonShebang(binaryPath) && !hasExecutableOnPath('python3')) {
+    return { ok: false, reason: 'Binary requires python3, but python3 is not available in runtime.' };
+  }
+
+  const probe = spawnSync(binaryPath, ['--version'], {
+    encoding: 'utf8',
+    timeout: 7000,
+    windowsHide: true,
+  });
+
+  if (probe.error) {
+    return { ok: false, reason: probe.error.message };
+  }
+
+  if (probe.status !== 0) {
+    const stderr = typeof probe.stderr === 'string' ? probe.stderr : '';
+    const stdout = typeof probe.stdout === 'string' ? probe.stdout : '';
+    const details = getErrorSnippet(`${stderr}\n${stdout}`.trim());
+    return { ok: false, reason: details || `Binary probe failed with exit code ${probe.status}.` };
+  }
+
+  return { ok: true };
 }
 
 function getYtDlpBinaryCandidates(): string[] {
@@ -127,41 +217,53 @@ function getYtDlpBinaryCandidates(): string[] {
 }
 
 async function downloadYtDlpBinary(destinationPath: string): Promise<string> {
-  if (isBinaryUsable(destinationPath)) {
+  const existingProbe = probeYtDlpBinary(destinationPath);
+  if (existingProbe.ok) {
     return destinationPath;
   }
 
-  const response = await fetch(YT_DLP_DOWNLOAD_URL, {
-    headers: {
-      'User-Agent': 'Mozilla/5.0',
-    },
-  });
+  let lastFailure = existingProbe.reason;
 
-  if (!response.ok) {
-    throw new ApiError(
-      `Failed to bootstrap yt-dlp binary (HTTP ${response.status}).`,
-      503,
-      'EXTRACTOR_BOOTSTRAP_FAILED'
-    );
+  for (const assetName of YT_DLP_ASSET_CANDIDATES) {
+    const assetUrl = `https://github.com/yt-dlp/yt-dlp/releases/latest/download/${assetName}`;
+
+    try {
+      const response = await fetch(assetUrl, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+        },
+      });
+
+      if (!response.ok) {
+        lastFailure = `Asset ${assetName} returned HTTP ${response.status}`;
+        continue;
+      }
+
+      const binaryBytes = Buffer.from(await response.arrayBuffer());
+      fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+      fs.writeFileSync(destinationPath, binaryBytes);
+
+      if (process.platform !== 'win32') {
+        fs.chmodSync(destinationPath, 0o755);
+      }
+
+      const probe = probeYtDlpBinary(destinationPath);
+      if (probe.ok) {
+        console.log(`[Server] yt-dlp bootstrap asset selected: ${assetName}`);
+        return destinationPath;
+      }
+
+      lastFailure = `Asset ${assetName} is unusable: ${probe.reason}`;
+    } catch (error) {
+      lastFailure = `Asset ${assetName} download failed: ${getErrorSnippet(getErrorText(error))}`;
+    }
   }
 
-  const binaryBytes = Buffer.from(await response.arrayBuffer());
-  fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
-  fs.writeFileSync(destinationPath, binaryBytes);
-
-  if (process.platform !== 'win32') {
-    fs.chmodSync(destinationPath, 0o755);
-  }
-
-  if (!isBinaryUsable(destinationPath)) {
-    throw new ApiError(
-      'yt-dlp binary was downloaded but is not executable.',
-      503,
-      'EXTRACTOR_BOOTSTRAP_FAILED'
-    );
-  }
-
-  return destinationPath;
+  throw new ApiError(
+    `Failed to bootstrap yt-dlp binary. ${lastFailure || 'Unknown bootstrap failure.'}`,
+    503,
+    'EXTRACTOR_BOOTSTRAP_FAILED'
+  );
 }
 
 function createYtDlpRunner(binaryPath: string): YtDlpRunner {
@@ -179,10 +281,13 @@ async function getYtDlpRunner(): Promise<YtDlpRunner> {
       const candidates = getYtDlpBinaryCandidates();
 
       for (const candidate of candidates) {
-        if (isBinaryUsable(candidate)) {
+        const probe = probeYtDlpBinary(candidate);
+        if (probe.ok) {
           console.log(`[Server] yt-dlp binary selected: ${candidate}`);
           return createYtDlpRunner(candidate);
         }
+
+        console.warn(`[Server] yt-dlp candidate rejected: ${candidate} | ${probe.reason}`);
       }
 
       const fallbackPath = path.join(getWritableTempDir(), 'bin', YT_DLP_BINARY_FILENAME);
@@ -231,6 +336,8 @@ function toApiErrorFromYtDlp(message: string): ApiError {
     normalized.includes('spawn') ||
     normalized.includes('eacces') ||
     normalized.includes('permission denied') ||
+    normalized.includes("python3': no such file") ||
+    normalized.includes('python3: no such file') ||
     normalized.includes('executable')
   ) {
     return new ApiError(
