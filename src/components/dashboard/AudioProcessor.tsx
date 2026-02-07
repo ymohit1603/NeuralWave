@@ -2,8 +2,9 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2 } from "lucide-react";
+import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2 } from "lucide-react";
 import { processAudio, exportAsWAV, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
+import { renderAudioWithSettings } from "@/lib/audio/exportWithSettings";
 import { useToast } from "@/hooks/use-toast";
 import { AuthModal } from "@/components/AuthModal";
 import { useAuth } from "@/contexts/AuthContext";
@@ -45,6 +46,7 @@ export function AudioProcessor({
   const [showControls, setShowControls] = useState(true);
   const [useRealTimeEngine] = useState(true);
   const [hasSavedTrack, setHasSavedTrack] = useState(!!trackId);
+  const [isExporting, setIsExporting] = useState(false);
 
   const { user } = useAuth();
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -362,7 +364,7 @@ export function AudioProcessor({
     animationFrameRef.current = requestAnimationFrame(updatePlaybackTime);
   };
 
-  const handleDownload = () => {
+  const handleDownload = async () => {
     if (!user) {
       setShowAuthModal(true);
       toast({
@@ -372,12 +374,37 @@ export function AudioProcessor({
       return;
     }
 
-    if (processedBuffer) {
-      exportAsWAV(processedBuffer, fileName);
+    const sourceForExport = processedBuffer || audioBuffer;
+    if (!sourceForExport) {
+      toast({
+        title: "Download unavailable",
+        description: "Audio is not ready yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setIsExporting(true);
+    try {
+      const rendered = await renderAudioWithSettings(sourceForExport, audioEngine.settings);
+      exportAsWAV(rendered, fileName);
       toast({
         title: "Download started",
-        description: "Your neural-optimized audio is downloading.",
+        description: "Your audio with current settings is downloading.",
       });
+
+      if (hasSavedTrack && onSaveTrack) {
+        await onSaveTrack(audioEngine.settings, sourceForExport);
+      }
+    } catch (error) {
+      console.error("Download render failed:", error);
+      toast({
+        title: "Download failed",
+        description: "Could not render audio with current settings. Please try again.",
+        variant: "destructive",
+      });
+    } finally {
+      setIsExporting(false);
     }
   };
 
@@ -431,7 +458,7 @@ export function AudioProcessor({
           onReset={audioEngine.reset}
           canUndo={audioEngine.canUndo}
           canRedo={audioEngine.canRedo}
-          disabled={!audioEngine.isReady && !audioEngine.isPlaying}
+          disabled={isProcessing || !isComplete}
         />
       )}
 
@@ -621,12 +648,26 @@ export function AudioProcessor({
                 <Button
                   variant="outline"
                   size="lg"
-                  onClick={handleDownload}
+                  onClick={() => void handleDownload()}
                   className="gap-2 w-full sm:w-auto"
+                  disabled={isExporting}
                 >
                   {!user && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
-                  <Download className="w-4 h-4 sm:w-5 sm:h-5" />
-                  Download
+                  {isExporting ? (
+                    <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                  ) : (
+                    <Download className="w-4 h-4 sm:w-5 sm:h-5" />
+                  )}
+                  {isExporting ? "Preparing..." : "Download"}
+                </Button>
+                <Button
+                  variant="ghost"
+                  size="lg"
+                  onClick={handleReset}
+                  className="gap-2 w-full sm:w-auto"
+                >
+                  <RotateCcw className="w-4 h-4 sm:w-5 sm:h-5" />
+                  Create Another Song
                 </Button>
               </div>
             </div>
