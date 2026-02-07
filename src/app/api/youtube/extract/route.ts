@@ -13,8 +13,12 @@ const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
 const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.mp4', '.webm', '.opus'] as const;
 const ERROR_LOG_SNIPPET_LENGTH = 800;
-const EXTRACTION_PIPELINE_VERSION = 'youtubei-browser-first-v4-2026-02-07';
+const EXTRACTION_PIPELINE_VERSION = 'youtubei-piped-cobalt-embed-v5-2026-02-07';
 const YOUTUBEI_PLAYER_ENDPOINT = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
+const YOUTUBE_EMBED_ENDPOINT = 'https://www.youtube.com/embed';
+const PIPED_INSTANCES_ENDPOINT = 'https://piped-instances.kavin.rocks/';
+const DEFAULT_PIPED_APIS = ['https://api.piped.private.coffee'] as const;
+const DEFAULT_COBALT_APIS = ['https://api.cobalt.tools'] as const;
 const YT_DLP_BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
 const YT_DLP_ASSET_CANDIDATES = (() => {
   if (process.platform === 'win32') {
@@ -111,6 +115,21 @@ interface YouTubeiPlayerResponse {
     formats?: YouTubeiFormat[];
     adaptiveFormats?: YouTubeiFormat[];
   };
+}
+
+interface CobaltTunnelResponse {
+  status?: string;
+  url?: string;
+  filename?: string;
+  tunnel?: string[];
+  output?: {
+    filename?: string;
+    type?: string;
+  };
+  audio?: string;
+  audioFilename?: string;
+  text?: string;
+  code?: string;
 }
 
 class ApiError extends Error {
@@ -544,6 +563,175 @@ function parseContentLength(value: string | number | undefined): number {
   return 0;
 }
 
+function parseUrlListFromEnv(
+  rawValue: string | undefined,
+  fallbackList: readonly string[]
+): string[] {
+  const parsed = (rawValue || '')
+    .split(/[,\s]+/)
+    .map((entry) => entry.trim())
+    .filter(Boolean);
+
+  if (parsed.length > 0) {
+    return Array.from(new Set(parsed));
+  }
+
+  return [...fallbackList];
+}
+
+function inferExtensionFromFilename(filename: string | undefined): string {
+  if (!filename) return '.mp3';
+  const ext = path.extname(filename).toLowerCase();
+  if (!ext || ext.length > 10) return '.mp3';
+  return ext;
+}
+
+function inferExtensionFromUrl(url: string): string {
+  try {
+    const parsed = new URL(url);
+    return inferExtensionFromFilename(path.basename(parsed.pathname));
+  } catch {
+    return inferExtensionFromFilename(url);
+  }
+}
+
+function inferExtensionFromMimeHeader(contentType: string | null): string {
+  const value = (contentType || '').toLowerCase();
+  if (value.includes('audio/webm')) return '.webm';
+  if (value.includes('audio/ogg')) return '.ogg';
+  if (value.includes('audio/opus')) return '.opus';
+  if (value.includes('audio/wav')) return '.wav';
+  if (value.includes('audio/mpeg') || value.includes('audio/mp3')) return '.mp3';
+  if (value.includes('audio/mp4')) return '.m4a';
+  if (value.includes('video/mp4')) return '.mp4';
+  return '.mp3';
+}
+
+function sanitizeOutputExtension(extension: string): string {
+  if (!extension) return '.mp3';
+  const normalized = extension.startsWith('.') ? extension.toLowerCase() : `.${extension.toLowerCase()}`;
+  return /^[a-z0-9.]{2,10}$/.test(normalized) ? normalized : '.mp3';
+}
+
+function pickOutputExtension(
+  preferredExtension: string | undefined,
+  downloadUrl: string,
+  contentType: string | null
+): string {
+  if (preferredExtension) {
+    return sanitizeOutputExtension(preferredExtension);
+  }
+  const fromMime = inferExtensionFromMimeHeader(contentType);
+  if (fromMime !== '.mp3') return fromMime;
+  return sanitizeOutputExtension(inferExtensionFromUrl(downloadUrl));
+}
+
+async function downloadFromDirectUrl(
+  downloadUrl: string,
+  outputTemplate: string,
+  options?: {
+    watchUrl?: string;
+    userAgent?: string;
+    preferredExtension?: string;
+    sourceLabel?: string;
+  }
+): Promise<string> {
+  const headers: Record<string, string> = {
+    'User-Agent': options?.userAgent || 'Mozilla/5.0',
+  };
+
+  if (options?.watchUrl) {
+    headers.Referer = options.watchUrl;
+    headers.Origin = 'https://www.youtube.com';
+  }
+
+  const mediaResponse = await fetch(downloadUrl, {
+    headers,
+    redirect: 'follow',
+  });
+
+  if (!mediaResponse.ok) {
+    throw new Error(`${options?.sourceLabel || 'direct'} download HTTP ${mediaResponse.status}`);
+  }
+
+  const declaredSize = parseContentLength(mediaResponse.headers.get('content-length') ?? undefined);
+  if (declaredSize > MAX_AUDIO_SIZE_BYTES) {
+    throw new ApiError(
+      'Video is too long. Please use videos under 30 minutes.',
+      400,
+      'VIDEO_TOO_LARGE'
+    );
+  }
+
+  const mediaBytes = Buffer.from(await mediaResponse.arrayBuffer());
+  if (mediaBytes.length === 0) {
+    throw new Error(`${options?.sourceLabel || 'direct'} download returned empty media`);
+  }
+
+  if (mediaBytes.length > MAX_AUDIO_SIZE_BYTES) {
+    throw new ApiError(
+      'Video is too long. Please use videos under 30 minutes.',
+      400,
+      'VIDEO_TOO_LARGE'
+    );
+  }
+
+  const extension = pickOutputExtension(
+    options?.preferredExtension,
+    downloadUrl,
+    mediaResponse.headers.get('content-type')
+  );
+  const outputFile = outputTemplate.replace('.%(ext)s', extension);
+  fs.writeFileSync(outputFile, mediaBytes);
+  return outputFile;
+}
+
+function extractJsonObjectAfterMarker(source: string, marker: string): string | null {
+  const markerIndex = source.indexOf(marker);
+  if (markerIndex < 0) return null;
+
+  const firstBrace = source.indexOf('{', markerIndex + marker.length);
+  if (firstBrace < 0) return null;
+
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+
+  for (let i = firstBrace; i < source.length; i++) {
+    const char = source[i];
+
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === '\\') {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+
+    if (char === '{') {
+      depth += 1;
+      continue;
+    }
+
+    if (char === '}') {
+      depth -= 1;
+      if (depth === 0) {
+        return source.slice(firstBrace, i + 1);
+      }
+    }
+  }
+
+  return null;
+}
+
 function pickBestYouTubeiProgressiveFormat(formats: YouTubeiFormat[]): YouTubeiFormat | null {
   const candidates = formats.filter((format) => {
     if (!format.url || !format.mimeType) return false;
@@ -687,44 +875,338 @@ async function downloadFromYouTubeiMediaUrl(
   outputTemplate: string,
   extension: string
 ): Promise<string> {
-  const mediaResponse = await fetch(mediaUrl, {
-    headers: {
-      'User-Agent': userAgent,
-      Referer: watchUrl,
-      Origin: 'https://www.youtube.com',
-    },
+  return downloadFromDirectUrl(mediaUrl, outputTemplate, {
+    watchUrl,
+    userAgent,
+    preferredExtension: extension,
+    sourceLabel: 'youtubei',
   });
+}
 
-  if (!mediaResponse.ok) {
-    throw new Error(`Media download HTTP ${mediaResponse.status}`);
+async function fetchPipedApis(): Promise<string[]> {
+  const configured = parseUrlListFromEnv(process.env.PIPED_API_URLS, DEFAULT_PIPED_APIS);
+  const registryEnabled = process.env.PIPED_DISABLE_INSTANCE_REGISTRY !== 'true';
+
+  if (!registryEnabled) {
+    return configured;
   }
 
-  const declaredSize = parseContentLength(mediaResponse.headers.get('content-length') ?? undefined);
-  if (declaredSize > MAX_AUDIO_SIZE_BYTES) {
-    throw new ApiError(
-      'Video is too long. Please use videos under 30 minutes.',
-      400,
-      'VIDEO_TOO_LARGE'
-    );
+  try {
+    const response = await fetch(PIPED_INSTANCES_ENDPOINT, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`[Server] Piped registry fetch failed: HTTP ${response.status}`);
+      return configured;
+    }
+
+    const registry = (await response.json()) as Array<{ api_url?: string; up?: boolean }>;
+    const healthyApis = registry
+      .filter((entry) => entry && entry.up !== false && typeof entry.api_url === 'string')
+      .map((entry) => String(entry.api_url).trim())
+      .filter(Boolean)
+      .slice(0, 8);
+
+    return Array.from(new Set([...configured, ...healthyApis]));
+  } catch (error) {
+    console.warn(`[Server] Piped registry fetch exception | ${getErrorSnippet(getErrorText(error))}`);
+    return configured;
+  }
+}
+
+function extractPipedStreamCandidates(payload: unknown, sourceStrategy: string): StreamCandidate[] {
+  const streamPayload = payload as {
+    audioStreams?: Array<Record<string, unknown>>;
+    videoStreams?: Array<Record<string, unknown>>;
+  };
+
+  const candidates: Array<StreamCandidate & { score: number }> = [];
+  const seenUrls = new Set<string>();
+  const addCandidate = (entry: Record<string, unknown>, boost: number): void => {
+    const url = typeof entry.url === 'string' ? entry.url : '';
+    if (!url || seenUrls.has(url)) return;
+
+    const mimeType = typeof entry.mimeType === 'string' ? entry.mimeType.toLowerCase() : '';
+    const codec = typeof entry.codec === 'string' ? entry.codec.toLowerCase() : '';
+    const bitrate = typeof entry.bitrate === 'number' ? entry.bitrate : 0;
+    const formatId = typeof entry.itag === 'number'
+      ? String(entry.itag)
+      : typeof entry.quality === 'string'
+        ? entry.quality
+        : 'unknown';
+    const ext = mimeType.includes('webm') || codec.includes('opus') ? 'webm' : 'mp4';
+    const score = boost + (ext === 'mp4' ? 15 : 10) + Math.min(Math.floor(bitrate / 25000), 20);
+
+    candidates.push({
+      url,
+      formatId,
+      ext,
+      protocol: 'https',
+      abr: Math.round(bitrate / 1000),
+      sourceStrategy,
+      score,
+    });
+    seenUrls.add(url);
+  };
+
+  const audioStreams = Array.isArray(streamPayload.audioStreams) ? streamPayload.audioStreams : [];
+  const videoStreams = Array.isArray(streamPayload.videoStreams) ? streamPayload.videoStreams : [];
+
+  for (const entry of audioStreams) {
+    addCandidate(entry, 120);
   }
 
-  const mediaBytes = Buffer.from(await mediaResponse.arrayBuffer());
-  if (mediaBytes.length === 0) {
-    throw new Error('Media response is empty');
+  for (const entry of videoStreams) {
+    const videoOnly = Boolean(entry.videoOnly);
+    if (videoOnly) continue;
+    addCandidate(entry, 30);
   }
 
-  if (mediaBytes.length > MAX_AUDIO_SIZE_BYTES) {
-    throw new ApiError(
-      'Video is too long. Please use videos under 30 minutes.',
-      400,
-      'VIDEO_TOO_LARGE'
-    );
+  return candidates
+    .sort((a, b) => b.score - a.score)
+    .slice(0, 8)
+    .map(({ score: _score, ...candidate }) => candidate);
+}
+
+async function tryDownloadWithPiped(
+  videoId: string,
+  watchUrl: string,
+  outputTemplate: string
+): Promise<string | null> {
+  const apis = await fetchPipedApis();
+  if (apis.length === 0) {
+    console.warn('[Server] Piped fallback skipped: no API instances configured');
+    return null;
   }
 
-  const normalizedExtension = extension.startsWith('.') ? extension : `.${extension}`;
-  const outputFile = outputTemplate.replace('.%(ext)s', normalizedExtension);
-  fs.writeFileSync(outputFile, mediaBytes);
-  return outputFile;
+  for (const api of apis) {
+    try {
+      const endpoint = `${api.replace(/\/+$/, '')}/streams/${videoId}`;
+      console.log(`[Server] Piped strategy: ${endpoint}`);
+      const response = await fetch(endpoint, {
+        headers: {
+          'User-Agent': 'Mozilla/5.0',
+          Referer: watchUrl,
+        },
+      });
+
+      if (!response.ok) {
+        console.warn(`[Server] Piped streams failed (${api}): HTTP ${response.status}`);
+        continue;
+      }
+
+      const payload = await response.json();
+      const candidates = extractPipedStreamCandidates(payload, `piped:${api}`);
+      if (candidates.length === 0) {
+        console.warn(`[Server] Piped returned no usable candidates (${api})`);
+        continue;
+      }
+
+      console.log(`[Server] Piped returned ${candidates.length} candidates (${api})`);
+      for (const candidate of candidates) {
+        try {
+          const outputFile = await downloadFromDirectUrl(candidate.url, outputTemplate, {
+            watchUrl,
+            userAgent: 'Mozilla/5.0',
+            preferredExtension: candidate.ext,
+            sourceLabel: `piped:${api}`,
+          });
+          console.log(`[Server] Piped download success (${api}, itag=${candidate.formatId})`);
+          return outputFile;
+        } catch (candidateError) {
+          if (candidateError instanceof ApiError) throw candidateError;
+          console.warn(
+            `[Server] Piped candidate failed (${api}, itag=${candidate.formatId}) | ${getErrorSnippet(getErrorText(candidateError))}`
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      console.warn(`[Server] Piped strategy failed (${api}) | ${getErrorSnippet(getErrorText(error))}`);
+    }
+  }
+
+  return null;
+}
+
+function getCobaltApiUrls(): string[] {
+  const single = process.env.COBALT_API_URL?.trim();
+  const list = parseUrlListFromEnv(process.env.COBALT_API_URLS, DEFAULT_COBALT_APIS);
+  return single ? Array.from(new Set([single, ...list])) : list;
+}
+
+function getCobaltResponseDownloadUrl(payload: CobaltTunnelResponse): {
+  downloadUrl: string | null;
+  filenameHint?: string;
+} {
+  if ((payload.status === 'tunnel' || payload.status === 'redirect') && typeof payload.url === 'string') {
+    return { downloadUrl: payload.url, filenameHint: payload.filename };
+  }
+
+  if (payload.status === 'local-processing' && Array.isArray(payload.tunnel) && typeof payload.tunnel[0] === 'string') {
+    return { downloadUrl: payload.tunnel[0], filenameHint: payload.output?.filename };
+  }
+
+  if (payload.status === 'picker' && typeof payload.audio === 'string') {
+    return { downloadUrl: payload.audio, filenameHint: payload.audioFilename };
+  }
+
+  return { downloadUrl: null };
+}
+
+async function tryDownloadWithCobalt(
+  watchUrl: string,
+  outputTemplate: string
+): Promise<string | null> {
+  const apis = getCobaltApiUrls();
+  if (apis.length === 0) {
+    console.warn('[Server] Cobalt fallback skipped: no API instances configured');
+    return null;
+  }
+
+  const cobaltApiKey = process.env.COBALT_API_KEY?.trim();
+  const cobaltBearer = process.env.COBALT_BEARER_TOKEN?.trim();
+
+  for (const api of apis) {
+    const endpoint = `${api.replace(/\/+$/, '')}/`;
+    try {
+      console.log(`[Server] Cobalt strategy: ${endpoint}`);
+      const headers: Record<string, string> = {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+      };
+
+      if (cobaltApiKey) {
+        headers.Authorization = `Api-Key ${cobaltApiKey}`;
+      } else if (cobaltBearer) {
+        headers.Authorization = `Bearer ${cobaltBearer}`;
+      }
+
+      const response = await fetch(endpoint, {
+        method: 'POST',
+        headers,
+        body: JSON.stringify({
+          url: watchUrl,
+          downloadMode: 'audio',
+          audioFormat: 'best',
+          audioBitrate: '128',
+          youtubeHLS: true,
+          youtubeBetterAudio: true,
+          alwaysProxy: true,
+          filenameStyle: 'basic',
+        }),
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => '');
+        console.warn(
+          `[Server] Cobalt request failed (${api}): HTTP ${response.status} | ${getErrorSnippet(errorText)}`
+        );
+        continue;
+      }
+
+      const payload = (await response.json()) as CobaltTunnelResponse;
+      const { downloadUrl, filenameHint } = getCobaltResponseDownloadUrl(payload);
+
+      if (!downloadUrl) {
+        console.warn(
+          `[Server] Cobalt returned non-download response (${api}): status=${payload.status || 'unknown'}, code=${payload.code || 'none'}, text=${payload.text || 'none'}`
+        );
+        continue;
+      }
+
+      const outputFile = await downloadFromDirectUrl(downloadUrl, outputTemplate, {
+        preferredExtension: inferExtensionFromFilename(filenameHint),
+        sourceLabel: `cobalt:${api}`,
+      });
+      console.log(`[Server] Cobalt download success (${api}, status=${payload.status || 'unknown'})`);
+      return outputFile;
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      console.warn(`[Server] Cobalt strategy failed (${api}) | ${getErrorSnippet(getErrorText(error))}`);
+    }
+  }
+
+  return null;
+}
+
+async function tryDownloadFromEmbedPlayer(
+  videoId: string,
+  watchUrl: string,
+  outputTemplate: string
+): Promise<string | null> {
+  const embedUrl = `${YOUTUBE_EMBED_ENDPOINT}/${videoId}?autoplay=1&mute=1&hl=en`;
+  try {
+    console.log(`[Server] Embed player strategy: ${embedUrl}`);
+    const response = await fetch(embedUrl, {
+      headers: {
+        'User-Agent': 'Mozilla/5.0',
+        Referer: watchUrl,
+      },
+    });
+
+    if (!response.ok) {
+      console.warn(`[Server] Embed player request failed: HTTP ${response.status}`);
+      return null;
+    }
+
+    const html = await response.text();
+    const playerJson = extractJsonObjectAfterMarker(html, 'ytInitialPlayerResponse = ');
+    if (!playerJson) {
+      console.warn('[Server] Embed player did not expose ytInitialPlayerResponse');
+      return null;
+    }
+
+    let playerResponse: YouTubeiPlayerResponse;
+    try {
+      playerResponse = JSON.parse(playerJson) as YouTubeiPlayerResponse;
+    } catch (parseError) {
+      console.warn(`[Server] Embed player JSON parse failed | ${getErrorSnippet(getErrorText(parseError))}`);
+      return null;
+    }
+
+    const playabilityStatus = playerResponse.playabilityStatus?.status || 'UNKNOWN';
+    if (playabilityStatus !== 'OK') {
+      const reason = playerResponse.playabilityStatus?.reason || '';
+      console.warn(
+        `[Server] Embed player not playable: ${playabilityStatus}${reason ? ` - ${reason}` : ''}`
+      );
+      return null;
+    }
+
+    const candidates = extractYouTubeiStreamCandidates(playerResponse, 'youtube-embed-player');
+    if (candidates.length === 0) {
+      console.warn('[Server] Embed player returned no stream candidates');
+      return null;
+    }
+
+    console.log(`[Server] Embed player returned ${candidates.length} candidates`);
+    for (const candidate of candidates) {
+      try {
+        const outputFile = await downloadFromDirectUrl(candidate.url, outputTemplate, {
+          watchUrl,
+          userAgent: 'Mozilla/5.0',
+          preferredExtension: candidate.ext,
+          sourceLabel: 'youtube-embed-player',
+        });
+        console.log(`[Server] Embed player download success (itag=${candidate.formatId})`);
+        return outputFile;
+      } catch (candidateError) {
+        if (candidateError instanceof ApiError) throw candidateError;
+        console.warn(
+          `[Server] Embed player candidate failed (itag=${candidate.formatId}) | ${getErrorSnippet(getErrorText(candidateError))}`
+        );
+      }
+    }
+  } catch (error) {
+    if (error instanceof ApiError) throw error;
+    console.warn(`[Server] Embed player strategy failed | ${getErrorSnippet(getErrorText(error))}`);
+  }
+
+  return null;
 }
 
 async function downloadWithYouTubeiDirect(
@@ -1318,6 +1800,18 @@ export async function POST(request: NextRequest) {
     shouldCleanupCookieFile = cookieConfig.shouldCleanup;
 
     audioFile = await downloadWithYouTubeiDirect(videoId, normalizedUrl, outputTemplate);
+
+    if (!audioFile) {
+      audioFile = await tryDownloadWithPiped(videoId, normalizedUrl, outputTemplate);
+    }
+
+    if (!audioFile) {
+      audioFile = await tryDownloadWithCobalt(normalizedUrl, outputTemplate);
+    }
+
+    if (!audioFile) {
+      audioFile = await tryDownloadFromEmbedPlayer(videoId, normalizedUrl, outputTemplate);
+    }
 
     if (!audioFile) {
       audioFile = await downloadAudioWithYtDlp(normalizedUrl, outputTemplate, cookieFile);
