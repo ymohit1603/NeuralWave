@@ -11,6 +11,20 @@ export const maxDuration = 60;
 const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
 const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.webm', '.opus'] as const;
+const ERROR_LOG_SNIPPET_LENGTH = 800;
+const YT_DLP_BINARY_FILENAME = process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp';
+const YT_DLP_DOWNLOAD_URL =
+  process.platform === 'win32'
+    ? 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp.exe'
+    : 'https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp';
+
+type YtDlpRunner = (
+  url: string,
+  flags?: Record<string, string | number | boolean>,
+  options?: { timeout?: number; windowsHide?: boolean; cwd?: string; env?: NodeJS.ProcessEnv }
+) => Promise<unknown>;
+
+let ytDlpRunnerPromise: Promise<YtDlpRunner> | null = null;
 
 interface VideoInfo {
   title: string;
@@ -87,6 +101,105 @@ function getErrorText(error: unknown): string {
   return String(error ?? 'Unknown error');
 }
 
+function getErrorSnippet(message: string): string {
+  return message.replace(/\s+/g, ' ').slice(0, ERROR_LOG_SNIPPET_LENGTH);
+}
+
+function isBinaryUsable(binaryPath: string): boolean {
+  try {
+    const mode = process.platform === 'win32' ? fs.constants.F_OK : fs.constants.X_OK;
+    fs.accessSync(binaryPath, mode);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getYtDlpBinaryCandidates(): string[] {
+  const candidates = [
+    process.env.YT_DLP_BINARY_PATH?.trim(),
+    process.env.YOUTUBE_DL_PATH?.trim(),
+    path.join(process.cwd(), 'node_modules', 'yt-dlp-exec', 'bin', YT_DLP_BINARY_FILENAME),
+    path.join(getWritableTempDir(), 'bin', YT_DLP_BINARY_FILENAME),
+  ].filter((candidate): candidate is string => Boolean(candidate));
+
+  return Array.from(new Set(candidates));
+}
+
+async function downloadYtDlpBinary(destinationPath: string): Promise<string> {
+  if (isBinaryUsable(destinationPath)) {
+    return destinationPath;
+  }
+
+  const response = await fetch(YT_DLP_DOWNLOAD_URL, {
+    headers: {
+      'User-Agent': 'Mozilla/5.0',
+    },
+  });
+
+  if (!response.ok) {
+    throw new ApiError(
+      `Failed to bootstrap yt-dlp binary (HTTP ${response.status}).`,
+      503,
+      'EXTRACTOR_BOOTSTRAP_FAILED'
+    );
+  }
+
+  const binaryBytes = Buffer.from(await response.arrayBuffer());
+  fs.mkdirSync(path.dirname(destinationPath), { recursive: true });
+  fs.writeFileSync(destinationPath, binaryBytes);
+
+  if (process.platform !== 'win32') {
+    fs.chmodSync(destinationPath, 0o755);
+  }
+
+  if (!isBinaryUsable(destinationPath)) {
+    throw new ApiError(
+      'yt-dlp binary was downloaded but is not executable.',
+      503,
+      'EXTRACTOR_BOOTSTRAP_FAILED'
+    );
+  }
+
+  return destinationPath;
+}
+
+function createYtDlpRunner(binaryPath: string): YtDlpRunner {
+  const maybeFactory = (ytDlp as unknown as { create?: (binary: string) => YtDlpRunner }).create;
+  if (typeof maybeFactory === 'function') {
+    return maybeFactory(binaryPath);
+  }
+
+  return ytDlp as unknown as YtDlpRunner;
+}
+
+async function getYtDlpRunner(): Promise<YtDlpRunner> {
+  if (!ytDlpRunnerPromise) {
+    ytDlpRunnerPromise = (async () => {
+      const candidates = getYtDlpBinaryCandidates();
+
+      for (const candidate of candidates) {
+        if (isBinaryUsable(candidate)) {
+          console.log(`[Server] yt-dlp binary selected: ${candidate}`);
+          return createYtDlpRunner(candidate);
+        }
+      }
+
+      const fallbackPath = path.join(getWritableTempDir(), 'bin', YT_DLP_BINARY_FILENAME);
+      const downloadedPath = await downloadYtDlpBinary(fallbackPath);
+      console.log(`[Server] yt-dlp binary downloaded: ${downloadedPath}`);
+      return createYtDlpRunner(downloadedPath);
+    })();
+  }
+
+  try {
+    return await ytDlpRunnerPromise;
+  } catch (error) {
+    ytDlpRunnerPromise = null;
+    throw error;
+  }
+}
+
 function isBotProtectionError(message: string): boolean {
   const normalized = message.toLowerCase();
   return (
@@ -113,6 +226,20 @@ function isRestrictedVideoError(message: string): boolean {
 function toApiErrorFromYtDlp(message: string): ApiError {
   const normalized = message.toLowerCase();
 
+  if (
+    normalized.includes('enoent') ||
+    normalized.includes('spawn') ||
+    normalized.includes('eacces') ||
+    normalized.includes('permission denied') ||
+    normalized.includes('executable')
+  ) {
+    return new ApiError(
+      'The extraction engine is initializing. Please retry in a few seconds.',
+      503,
+      'EXTRACTOR_UNAVAILABLE'
+    );
+  }
+
   if (isBotProtectionError(message)) {
     return new ApiError(
       'YouTube temporarily blocked automated access for this video. Please try another public video or retry in a few minutes.',
@@ -138,6 +265,17 @@ function toApiErrorFromYtDlp(message: string): ApiError {
       'Invalid YouTube URL. Please provide a valid video link.',
       400,
       'INVALID_URL'
+    );
+  }
+
+  if (
+    normalized.includes('requested format is not available') ||
+    normalized.includes('no video formats found')
+  ) {
+    return new ApiError(
+      'This video has no downloadable audio stream. Please try a different video.',
+      400,
+      'AUDIO_FORMAT_UNAVAILABLE'
     );
   }
 
@@ -199,18 +337,32 @@ function createCookiesFile(tempDir: string): { cookieFile: string | null; should
   return { cookieFile: null, shouldCleanup: false };
 }
 
+function getOptionalExtractorArgs(): string {
+  const poToken = process.env.YOUTUBE_PO_TOKEN?.trim();
+  const visitorData = process.env.YOUTUBE_VISITOR_DATA?.trim();
+
+  if (!poToken || !visitorData) {
+    return '';
+  }
+
+  return `;po_token=${poToken};visitor_data=${visitorData}`;
+}
+
 function buildDownloadStrategies(outputTemplate: string, cookieFile: string | null): DownloadStrategy[] {
+  const optionalExtractorArgs = getOptionalExtractorArgs();
   const commonFlags: Record<string, string | number | boolean> = {
     noPlaylist: true,
-    noWarnings: true,
-    quiet: true,
+    ignoreConfig: true,
+    geoBypass: true,
     format: 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio',
     output: outputTemplate,
     retries: 2,
     fragmentRetries: 2,
+    extractorRetries: 2,
     fileAccessRetries: 2,
     socketTimeout: 15,
     forceIpv4: true,
+    noCheckCertificates: true,
   };
 
   if (cookieFile) {
@@ -222,27 +374,34 @@ function buildDownloadStrategies(outputTemplate: string, cookieFile: string | nu
       label: 'android client',
       flags: {
         ...commonFlags,
-        extractorArgs: 'youtube:player_client=android',
+        extractorArgs: `youtube:player_client=android${optionalExtractorArgs}`,
       },
     },
     {
       label: 'ios client',
       flags: {
         ...commonFlags,
-        extractorArgs: 'youtube:player_client=ios',
+        extractorArgs: `youtube:player_client=ios${optionalExtractorArgs}`,
       },
     },
     {
       label: 'tv embedded client',
       flags: {
         ...commonFlags,
-        extractorArgs: 'youtube:player_client=tv_embedded',
+        extractorArgs: `youtube:player_client=tv_embedded${optionalExtractorArgs}`,
       },
     },
     {
       label: 'default client',
       flags: {
         ...commonFlags,
+      },
+    },
+    {
+      label: 'generic bestaudio fallback',
+      flags: {
+        ...commonFlags,
+        format: 'bestaudio/best',
       },
     },
   ];
@@ -290,13 +449,14 @@ async function downloadAudioWithYtDlp(
   outputTemplate: string,
   cookieFile: string | null
 ): Promise<string> {
+  const runner = await getYtDlpRunner();
   const strategies = buildDownloadStrategies(outputTemplate, cookieFile);
   let lastErrorMessage = 'Unknown yt-dlp error';
 
   for (const strategy of strategies) {
     try {
       console.log(`[Server] yt-dlp strategy: ${strategy.label}`);
-      await ytDlp(url, strategy.flags, {
+      await runner(url, strategy.flags, {
         timeout: DOWNLOAD_TIMEOUT_MS,
         windowsHide: true,
       });
@@ -310,7 +470,9 @@ async function downloadAudioWithYtDlp(
       cleanupDownloadedFiles(outputTemplate);
     } catch (error) {
       lastErrorMessage = getErrorText(error);
-      console.warn(`[Server] yt-dlp failed for strategy: ${strategy.label}`);
+      console.warn(
+        `[Server] yt-dlp failed for strategy: ${strategy.label} | ${getErrorSnippet(lastErrorMessage)}`
+      );
       cleanupDownloadedFiles(outputTemplate);
     }
   }
