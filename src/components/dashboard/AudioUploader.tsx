@@ -1,4 +1,4 @@
-'use client';
+﻿'use client';
 
 import { useState, useCallback, useRef, useEffect } from "react";
 import { Upload, Search, Music, Loader2, AlertCircle, Clock, Eye, Lock } from "lucide-react";
@@ -314,7 +314,7 @@ export function AudioUploader({
                 {isDragging ? "Drop your file here" : "Drag & drop your audio file"}
               </p>
               <p className="text-sm text-muted-foreground mb-4">
-                or click to browse � MP3, WAV, M4A supported
+                or click to browse • MP3, WAV, M4A supported
               </p>
 
               <Button variant="outline" className="pointer-events-none">
@@ -480,3 +480,4 @@ export function AudioUploader({
     </div>
   );
 }
+
