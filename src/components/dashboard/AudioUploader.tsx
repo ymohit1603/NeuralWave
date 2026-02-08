@@ -1,7 +1,7 @@
 ﻿'use client';
 
 import { useState, useCallback, useRef, useEffect } from "react";
-import { Upload, Search, Music, Loader2, AlertCircle, Clock, Eye, Lock } from "lucide-react";
+import { Upload, Search, Music, Loader2, AlertCircle, Clock, Eye } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
@@ -43,7 +43,6 @@ export function AudioUploader({
   youtubeProgress = null,
   searchResults = [],
   isSearching = false,
-  hasActiveSubscription = false,
 }: AudioUploaderProps) {
   const [isDragging, setIsDragging] = useState(false);
   const [searchQuery, setSearchQuery] = useState("");
@@ -258,14 +257,14 @@ export function AudioUploader({
             className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
           >
             <Upload className="w-3 h-3 sm:w-4 sm:h-4" />
-            <span className="hidden xs:inline">Upload</span>
+            <span>Upload</span>
           </TabsTrigger>
           <TabsTrigger
             value="search"
             className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
           >
             <Search className="w-3 h-3 sm:w-4 sm:h-4" />
-            <span className="hidden xs:inline">Search</span>
+            <span>Search</span>
       
           </TabsTrigger>
         </TabsList>
