@@ -266,7 +266,7 @@ export function AudioUploader({
           >
             <Search className="w-3 h-3 sm:w-4 sm:h-4" />
             <span className="hidden xs:inline">Search</span>
-            {!hasActiveSubscription && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
+      
           </TabsTrigger>
         </TabsList>
 
@@ -327,14 +327,7 @@ export function AudioUploader({
         {/* Search Tab */}
         <TabsContent value="search" className="mt-0">
           <div className="space-y-4">
-            {!hasActiveSubscription && (
-              <div className="flex items-center justify-center gap-2 p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/20">
-                <Lock className="w-4 h-4 text-amber-600" />
-                <p className="text-xs sm:text-sm text-amber-700 dark:text-amber-400">
-                  Search works for everyone. Converting search results requires Pro.
-                </p>
-              </div>
-            )}
+            
 
             {/* Search Input */}
             <form onSubmit={handleSearchSubmit} className="flex gap-2 sm:gap-3 items-start">
