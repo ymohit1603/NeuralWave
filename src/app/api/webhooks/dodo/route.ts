@@ -26,11 +26,11 @@ const getWebhookSecret = () => {
   return secret || '';
 };
 
-// Product ID to plan type mapping
+// Product ID to plan type mapping (LIVE MODE)
 const PRODUCT_TO_PLAN: Record<string, 'weekly' | 'yearly' | 'lifetime'> = {
-  'pdt_0NXD7Umc3hmVRX5zSaA60': 'weekly',
-  'pdt_0NXD7IyCyyfmzj0CLbw1S': 'yearly',
-  'pdt_0NXD7B2s8C1xq86fGizyf': 'lifetime',
+  'pdt_0NY4WWfzpoe7TaaVa7MPa': 'weekly',
+  'pdt_0NY4WXOt0LVbL3MPY8HuR': 'yearly',
+  'pdt_0NY4WYX9oEAwLgjqjmaGC': 'lifetime',
 };
 
 interface DodoWebhookPayload {
