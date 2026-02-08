@@ -62,7 +62,12 @@ interface DodoWebhookPayload {
 }
 
 // Verify webhook signature using Svix format (DodoPayments uses Svix)
-function verifyWebhookSignature(payload: string, signature: string | null, timestamp: string | null): boolean {
+function verifyWebhookSignature(
+  payload: string, 
+  signature: string | null, 
+  timestamp: string | null,
+  webhookId: string | null
+): boolean {
   const WEBHOOK_SECRET = getWebhookSecret();
   
   if (!WEBHOOK_SECRET) {
@@ -77,23 +82,33 @@ function verifyWebhookSignature(payload: string, signature: string | null, times
   }
 
   try {
-    // Svix uses: timestamp.payload format for signing
     const crypto = require('crypto');
-    const signedContent = `${timestamp}.${payload}`;
     
-    // Svix secret format: whsec_xxxxx - we need to decode the base64 part
-    const secretBytes = Buffer.from(WEBHOOK_SECRET.replace('whsec_', ''), 'base64');
+    // Svix signed content format: {webhook-id}.{timestamp}.{payload}
+    const signedContent = `${webhookId}.${timestamp}.${payload}`;
+    
+    // Svix secret format: whsec_xxxxx - decode the base64 part after whsec_
+    let secretBytes: Buffer;
+    if (WEBHOOK_SECRET.startsWith('whsec_')) {
+      secretBytes = Buffer.from(WEBHOOK_SECRET.substring(6), 'base64');
+    } else {
+      // If secret doesn't have whsec_ prefix, use it as-is
+      secretBytes = Buffer.from(WEBHOOK_SECRET);
+    }
     
     const expectedSignature = crypto
       .createHmac('sha256', secretBytes)
-      .update(signedContent)
+      .update(signedContent, 'utf8')
       .digest('base64');
 
-    // Svix signature format: v1,signature1 v1,signature2
+    // Svix signature format: v1,signature1 v1,signature2 (space-separated)
     const signatures = signature.split(' ');
     
     for (const sig of signatures) {
-      const [version, sigValue] = sig.split(',');
+      const parts = sig.split(',');
+      if (parts.length !== 2) continue;
+      
+      const [version, sigValue] = parts;
       if (version === 'v1' && sigValue === expectedSignature) {
         console.log('[Webhook] ✓ Signature verified');
         return true;
@@ -101,8 +116,12 @@ function verifyWebhookSignature(payload: string, signature: string | null, times
     }
     
     console.error('[Webhook] ❌ Invalid signature');
-    console.error('[Webhook] Expected:', expectedSignature.substring(0, 20) + '...');
-    console.error('[Webhook] Received:', signature.substring(0, 50) + '...');
+    console.error('[Webhook] Expected:', expectedSignature);
+    console.error('[Webhook] Received signatures:', signatures);
+    console.error('[Webhook] Webhook ID:', webhookId);
+    console.error('[Webhook] Timestamp:', timestamp);
+    console.error('[Webhook] Payload length:', payload.length);
+    
     return false;
   } catch (error) {
     console.error('[Webhook] ❌ Signature verification error:', error);
@@ -128,7 +147,7 @@ export async function POST(request: NextRequest) {
     console.log('[Webhook] Webhook ID:', webhookId);
 
     // Verify webhook signature
-    if (!verifyWebhookSignature(payload, signature, timestamp)) {
+    if (!verifyWebhookSignature(payload, signature, timestamp, webhookId)) {
       console.error('[Webhook] ❌ Invalid webhook signature');
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
     }
