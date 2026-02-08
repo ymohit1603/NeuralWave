@@ -46,7 +46,8 @@ export default function UpgradePage() {
         "Advanced beat detection",
         "Priority processing speed"
       ],
-      current: hasActiveSubscription && subscriptionPlan === 'weekly'
+      current: hasActiveSubscription && subscriptionPlan === 'weekly',
+      canUpgrade: false // Can't upgrade from weekly to weekly
     },
     {
       id: 'yearly' as PlanType,
@@ -63,7 +64,8 @@ export default function UpgradePage() {
         "Priority support"
       ],
       popular: true,
-      current: hasActiveSubscription && subscriptionPlan === 'yearly'
+      current: hasActiveSubscription && subscriptionPlan === 'yearly',
+      canUpgrade: subscriptionPlan === 'weekly' // Can upgrade from weekly to yearly
     },
     {
       id: 'lifetime' as PlanType,
@@ -79,7 +81,8 @@ export default function UpgradePage() {
         "Early beta access",
         "Priority feature requests"
       ],
-      current: hasActiveSubscription && subscriptionPlan === 'lifetime'
+      current: hasActiveSubscription && subscriptionPlan === 'lifetime',
+      canUpgrade: subscriptionPlan === 'weekly' || subscriptionPlan === 'yearly' // Can upgrade from any plan to lifetime
     }
   ];
 
@@ -113,10 +116,13 @@ export default function UpgradePage() {
               <Crown className="w-8 h-8 sm:w-12 sm:h-12 text-white" />
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3">
-              Supercharge Your Brain with Pro
+              {hasActiveSubscription ? 'Upgrade Your Plan' : 'Supercharge Your Brain with Pro'}
             </h2>
             <p className="text-sm sm:text-lg text-muted-foreground max-w-2xl mx-auto px-4">
-              Get unlimited access to neural-optimized audio, advanced features, and priority support
+              {hasActiveSubscription 
+                ? `You're currently on the ${subscriptionPlan} plan. Upgrade to unlock even more features!`
+                : 'Get unlimited access to neural-optimized audio, advanced features, and priority support'
+              }
             </p>
           </div>
 
@@ -156,6 +162,12 @@ export default function UpgradePage() {
                   </Badge>
                 )}
 
+                {plan.canUpgrade && !plan.current && (
+                  <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-green-500 to-emerald-500">
+                    Upgrade Available
+                  </Badge>
+                )}
+
                 <div className="text-center mb-4 sm:mb-6">
                   <h3 className="text-lg sm:text-xl font-bold mb-2">{plan.name}</h3>
                   <div className="flex items-baseline justify-center gap-1 mb-1">
@@ -176,11 +188,16 @@ export default function UpgradePage() {
                 <Button
                   variant={plan.popular ? "neural" : plan.current ? "outline" : "default"}
                   className="w-full gap-2"
-                  disabled={plan.current}
+                  disabled={plan.current && !plan.canUpgrade}
                   onClick={() => handleUpgrade(plan.id)}
                 >
                   {plan.current ? (
                     "Current Plan"
+                  ) : plan.canUpgrade ? (
+                    <>
+                      <Zap className="w-4 h-4" />
+                      Upgrade to {plan.name}
+                    </>
                   ) : (
                     <>
                       <Zap className="w-4 h-4" />
@@ -194,18 +211,37 @@ export default function UpgradePage() {
 
           {/* FAQ */}
           <div className="mt-8 sm:mt-12 p-4 sm:p-6 rounded-2xl glass-card border border-primary/20">
-            <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 text-center">Why Upgrade?</h3>
+            <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 text-center">
+              {hasActiveSubscription ? 'Upgrade Information' : 'Why Upgrade?'}
+            </h3>
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6 text-xs sm:text-sm text-muted-foreground">
-              <div>
-                <p className="mb-2">
-                  <strong className="text-foreground">Free Plan:</strong> Perfect for trying out neural optimization with 20-second previews.
-                </p>
-              </div>
-              <div>
-                <p>
-                  <strong className="text-foreground">Pro Plans:</strong> Unlock full-length audio, unlimited downloads, and advanced features for serious users.
-                </p>
-              </div>
+              {hasActiveSubscription ? (
+                <>
+                  <div>
+                    <p className="mb-2">
+                      <strong className="text-foreground">Upgrading Your Plan:</strong> When you upgrade, your new plan takes effect immediately and your current subscription will be updated.
+                    </p>
+                  </div>
+                  <div>
+                    <p>
+                      <strong className="text-foreground">Lifetime Access:</strong> Upgrade to lifetime for one-time payment and never worry about renewals again. Perfect for long-term users!
+                    </p>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <p className="mb-2">
+                      <strong className="text-foreground">Free Plan:</strong> Perfect for trying out neural optimization with 20-second previews.
+                    </p>
+                  </div>
+                  <div>
+                    <p>
+                      <strong className="text-foreground">Pro Plans:</strong> Unlock full-length audio, unlimited downloads, and advanced features for serious users.
+                    </p>
+                  </div>
+                </>
+              )}
             </div>
           </div>
         </div>
