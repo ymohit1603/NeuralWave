@@ -10,7 +10,7 @@ import { useAuth } from "@/contexts/AuthContext";
 const navItems = [
   { to: "/dashboard", icon: Home, label: "Home" },
   { to: "/dashboard/tracks", icon: Music, label: "My Music" },
-  { to: "/dashboard/upgrade", icon: Crown, label: "Upgrade to Pro" },
+  { to: "/dashboard/upgrade", icon: Crown, label: "Upgrade to Pro", labelPro: "Manage Plan" },
   { to: "/dashboard/settings", icon: Settings, label: "Settings" },
 ];
 
@@ -80,10 +80,11 @@ export function Sidebar() {
       <nav className="flex-1 p-3 space-y-1">
         {navItems.map((item) => {
           const isActive = pathname === item.to;
-          // Hide upgrade link if user has subscription
-          if (item.to === '/dashboard/upgrade' && hasActiveSubscription) {
-            return null;
-          }
+          // Show different label for upgrade link if user has subscription
+          const label = item.to === '/dashboard/upgrade' && hasActiveSubscription && item.labelPro
+            ? item.labelPro
+            : item.label;
+          
           return (
             <Link
               key={item.to}
@@ -96,7 +97,7 @@ export function Sidebar() {
               }`}
             >
               <item.icon className="w-5 h-5 flex-shrink-0" />
-              {!collapsed && <span className="font-medium">{item.label}</span>}
+              {!collapsed && <span className="font-medium">{label}</span>}
             </Link>
           );
         })}
@@ -116,21 +117,40 @@ export function Sidebar() {
         )}
       </Button>
 
-      {/* Pro upgrade banner - only show if not subscribed */}
-      {!collapsed && !hasActiveSubscription && (
+      {/* Pro upgrade/manage banner */}
+      {!collapsed && (
         <div className="m-3 p-4 rounded-xl bg-gradient-to-br from-primary/20 to-accent/10 border border-primary/20">
-          <div className="flex items-center gap-2 mb-2">
-            <Crown className="w-4 h-4 text-accent" />
-            <span className="text-sm font-semibold">Go Pro</span>
-          </div>
-          <p className="text-xs text-muted-foreground mb-3">
-            Unlock full audio & downloads
-          </p>
-          <Link href="/dashboard/upgrade" className="block" onClick={() => setMobileOpen(false)}>
-            <Button variant="neural" size="sm" className="w-full">
-              Upgrade Now
-            </Button>
-          </Link>
+          {hasActiveSubscription ? (
+            <>
+              <div className="flex items-center gap-2 mb-2">
+                <Crown className="w-4 h-4 text-accent" />
+                <span className="text-sm font-semibold">Pro Member</span>
+              </div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Upgrade to lifetime access
+              </p>
+              <Link href="/dashboard/upgrade" className="block" onClick={() => setMobileOpen(false)}>
+                <Button variant="neural" size="sm" className="w-full">
+                  View Plans
+                </Button>
+              </Link>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-2 mb-2">
+                <Crown className="w-4 h-4 text-accent" />
+                <span className="text-sm font-semibold">Go Pro</span>
+              </div>
+              <p className="text-xs text-muted-foreground mb-3">
+                Unlock full audio & downloads
+              </p>
+              <Link href="/dashboard/upgrade" className="block" onClick={() => setMobileOpen(false)}>
+                <Button variant="neural" size="sm" className="w-full">
+                  Upgrade Now
+                </Button>
+              </Link>
+            </>
+          )}
         </div>
       )}
 
