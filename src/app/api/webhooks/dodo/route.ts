@@ -38,9 +38,13 @@ interface DodoWebhookPayload {
   business_id: string;
   timestamp: string;
   data: {
-    subscription_id?: string;
+    subscription_id?: string | null;
     payment_id?: string;
     product_id?: string;
+    product_cart?: Array<{
+      product_id: string;
+      quantity: number;
+    }>;
     product?: {
       product_id: string;
       name?: string;
@@ -68,6 +72,9 @@ interface DodoWebhookPayload {
     expires_at?: string;
     next_billing_date?: string;
     cancelled_at?: string;
+    total_amount?: number;
+    invoice_id?: string;
+    payload_type?: string;
   };
 }
 
@@ -164,10 +171,7 @@ export async function POST(request: NextRequest) {
 
     const webhookData: DodoWebhookPayload = JSON.parse(payload);
     console.log('[Webhook] Event type:', webhookData.type);
-    console.log('[Webhook] Full data:', JSON.stringify(webhookData.data, null, 2));
-    console.log('[Webhook] Product ID:', webhookData.data.product_id);
-    console.log('[Webhook] Product object:', webhookData.data.product);
-    console.log('[Webhook] Subscription object:', webhookData.data.subscription);
+    console.log('[Webhook] Product cart:', webhookData.data.product_cart);
     console.log('[Webhook] Customer email:', webhookData.data.customer?.email);
 
     if (!webhookData.type) {
@@ -249,17 +253,21 @@ export async function POST(request: NextRequest) {
 
 async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
   console.log('[Webhook] Processing payment success...');
-  const { subscription_id, payment_id, product_id, product, subscription, customer } = data;
+  const { subscription_id, payment_id, product_id, product, subscription, product_cart, customer } = data;
   
   console.log('[Webhook] Subscription ID:', subscription_id);
   console.log('[Webhook] Payment ID:', payment_id);
   console.log('[Webhook] Product ID (direct):', product_id);
-  console.log('[Webhook] Product object:', product);
-  console.log('[Webhook] Subscription object:', subscription);
+  console.log('[Webhook] Product cart:', product_cart);
   console.log('[Webhook] Customer email:', customer.email);
 
   // Get product_id from multiple possible locations
-  const actualProductId = product_id || product?.product_id || subscription?.product_id;
+  // Priority: product_cart[0] > product_id > product.product_id > subscription.product_id
+  const actualProductId = 
+    (product_cart && product_cart.length > 0 ? product_cart[0].product_id : null) ||
+    product_id || 
+    product?.product_id || 
+    subscription?.product_id;
   
   if (!actualProductId) {
     console.error('[Webhook] ❌ No product ID found in any field');
@@ -464,10 +472,14 @@ async function handleSubscriptionOnHold(data: DodoWebhookPayload['data']) {
 
 async function handleSubscriptionPlanChanged(data: DodoWebhookPayload['data']) {
   console.log('[Webhook] Processing subscription plan change...');
-  const { product_id, product, subscription, subscription_id, payment_id } = data;
+  const { product_id, product, subscription, product_cart, subscription_id, payment_id } = data;
 
   // Get product_id from multiple possible locations
-  const actualProductId = product_id || product?.product_id || subscription?.product_id;
+  const actualProductId = 
+    (product_cart && product_cart.length > 0 ? product_cart[0].product_id : null) ||
+    product_id || 
+    product?.product_id || 
+    subscription?.product_id;
   
   if (!actualProductId) {
     console.error('[Webhook] ❌ No product ID found');
