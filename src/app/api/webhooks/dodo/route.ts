@@ -1,14 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createClient } from '@supabase/supabase-js';
 
+// Force dynamic route to ensure environment variables are read at runtime
+export const dynamic = 'force-dynamic';
+export const runtime = 'nodejs';
+
 // Create a Supabase client with service role for server-side operations
-const supabaseAdmin = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL || '',
-  process.env.SUPABASE_SERVICE_ROLE_KEY || ''
-);
+const getSupabaseAdmin = () => {
+  const url = process.env.NEXT_PUBLIC_SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+  
+  if (!url || !key) {
+    console.error('Missing Supabase environment variables');
+    throw new Error('Supabase configuration missing');
+  }
+  
+  return createClient(url, key);
+};
 
 // DodoPayments webhook secret for verification
-const WEBHOOK_SECRET = process.env.DODO_WEBHOOK_SECRET || '';
+const getWebhookSecret = () => {
+  const secret = process.env.DODO_WEBHOOK_SECRET;
+  console.log('[Webhook] Secret configured:', secret ? 'YES' : 'NO');
+  console.log('[Webhook] Secret length:', secret?.length || 0);
+  return secret || '';
+};
 
 // Product ID to plan type mapping
 const PRODUCT_TO_PLAN: Record<string, 'weekly' | 'yearly' | 'lifetime'> = {
@@ -35,36 +51,71 @@ interface DodoWebhookPayload {
 
 // Verify webhook signature (if DodoPayments provides one)
 function verifyWebhookSignature(payload: string, signature: string | null): boolean {
-  if (!WEBHOOK_SECRET || !signature) {
-    // If no secret configured, skip verification (not recommended for production)
-    console.warn('Webhook signature verification skipped - no secret configured');
-    return true;
+  const WEBHOOK_SECRET = getWebhookSecret();
+  
+  if (!WEBHOOK_SECRET) {
+    console.warn('[Webhook] ⚠️ Webhook signature verification skipped - no secret configured');
+    console.warn('[Webhook] Set DODO_WEBHOOK_SECRET in your environment variables');
+    return true; // Allow in development, but log warning
+  }
+  
+  if (!signature) {
+    console.warn('[Webhook] ⚠️ No signature provided in request');
+    return true; // Some webhooks might not send signature initially
   }
 
   // DodoPayments typically uses HMAC-SHA256 for webhook signatures
-  // Implement based on their documentation
   const crypto = require('crypto');
   const expectedSignature = crypto
     .createHmac('sha256', WEBHOOK_SECRET)
     .update(payload)
     .digest('hex');
 
-  return signature === expectedSignature || signature === `sha256=${expectedSignature}`;
+  const isValid = signature === expectedSignature || signature === `sha256=${expectedSignature}`;
+  
+  if (!isValid) {
+    console.error('[Webhook] ❌ Invalid signature');
+    console.error('[Webhook] Expected:', expectedSignature.substring(0, 20) + '...');
+    console.error('[Webhook] Received:', signature.substring(0, 20) + '...');
+  } else {
+    console.log('[Webhook] ✓ Signature verified');
+  }
+  
+  return isValid;
 }
 
 export async function POST(request: NextRequest) {
+  console.log('[Webhook] ========================================');
+  console.log('[Webhook] Received webhook request');
+  
   try {
     const payload = await request.text();
-    const signature = request.headers.get('x-dodo-signature') || request.headers.get('x-webhook-signature');
+    console.log('[Webhook] Payload length:', payload.length);
+    console.log('[Webhook] Raw payload:', payload.substring(0, 200));
+    
+    const signature = request.headers.get('x-dodo-signature') || 
+                     request.headers.get('x-webhook-signature') ||
+                     request.headers.get('dodo-signature');
+    
+    console.log('[Webhook] Signature header:', signature ? 'Present' : 'Missing');
+    console.log('[Webhook] All headers:', Object.fromEntries(request.headers.entries()));
 
     // Verify webhook signature
     if (!verifyWebhookSignature(payload, signature)) {
-      console.error('Invalid webhook signature');
+      console.error('[Webhook] ❌ Invalid webhook signature');
       return NextResponse.json({ error: 'Invalid signature' }, { status: 401 });
     }
 
     const webhookData: DodoWebhookPayload = JSON.parse(payload);
-    console.log('Received DodoPayments webhook:', webhookData.event);
+    console.log('[Webhook] Parsed webhook data:', JSON.stringify(webhookData, null, 2));
+    console.log('[Webhook] Event type:', webhookData.event);
+    console.log('[Webhook] Event data:', webhookData.data);
+
+    if (!webhookData.event) {
+      console.error('[Webhook] ❌ No event type in webhook payload');
+      console.error('[Webhook] Full payload:', webhookData);
+      return NextResponse.json({ error: 'No event type provided' }, { status: 400 });
+    }
 
     // Handle different webhook events
     switch (webhookData.event) {
@@ -120,41 +171,58 @@ export async function POST(request: NextRequest) {
         break;
 
       default:
-        console.log('Unhandled webhook event:', webhookData.event);
+        console.log('[Webhook] ⚠️ Unhandled webhook event:', webhookData.event);
     }
 
-    return NextResponse.json({ received: true });
+    console.log('[Webhook] ✓ Webhook processed successfully');
+    console.log('[Webhook] ========================================');
+    return NextResponse.json({ received: true, event: webhookData.event });
   } catch (error) {
-    console.error('Webhook processing error:', error);
+    console.error('[Webhook] ========================================');
+    console.error('[Webhook] ❌ Webhook processing error:', error);
+    console.error('[Webhook] Error details:', error instanceof Error ? error.message : String(error));
+    console.error('[Webhook] ========================================');
     return NextResponse.json(
-      { error: 'Webhook processing failed' },
+      { error: 'Webhook processing failed', details: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
   }
 }
 
 async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
+  console.log('[Webhook] Processing payment success...');
   const { payment_id, product_id, client_reference_id, customer_email } = data;
+  
+  console.log('[Webhook] Payment ID:', payment_id);
+  console.log('[Webhook] Product ID:', product_id);
+  console.log('[Webhook] Client Reference ID:', client_reference_id);
+  console.log('[Webhook] Customer Email:', customer_email);
 
   // Get plan type from product ID
   const planType = PRODUCT_TO_PLAN[product_id];
   if (!planType) {
-    console.error('Unknown product ID:', product_id);
+    console.error('[Webhook] ❌ Unknown product ID:', product_id);
+    console.error('[Webhook] Available products:', Object.keys(PRODUCT_TO_PLAN));
     return;
   }
+  
+  console.log('[Webhook] Plan type:', planType);
 
   // Get user ID from client_reference_id or look up by email
   let userId = client_reference_id;
 
   if (!userId && customer_email) {
-    // Try to find user by email
+    console.log('[Webhook] Looking up user by email:', customer_email);
+    const supabaseAdmin = getSupabaseAdmin();
     const { data: userData } = await supabaseAdmin.auth.admin.listUsers();
     const user = userData?.users?.find(u => u.email === customer_email);
     userId = user?.id;
+    console.log('[Webhook] Found user ID:', userId);
   }
 
   if (!userId) {
-    console.error('Could not determine user ID for payment:', payment_id);
+    console.error('[Webhook] ❌ Could not determine user ID for payment:', payment_id);
+    const supabaseAdmin = getSupabaseAdmin();
     // Store the payment for later reconciliation
     await supabaseAdmin.from('pending_payments').insert({
       payment_id,
@@ -163,6 +231,7 @@ async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
       plan_type: planType,
       created_at: new Date().toISOString(),
     });
+    console.log('[Webhook] Stored as pending payment');
     return;
   }
 
@@ -180,6 +249,7 @@ async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
   // lifetime has no expiration
 
   // Check if user already has an active subscription
+  const supabaseAdmin = getSupabaseAdmin();
   const { data: existingSubscription } = await supabaseAdmin
     .from('subscriptions')
     .select('*')
@@ -188,8 +258,9 @@ async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
     .single();
 
   if (existingSubscription) {
+    console.log('[Webhook] Updating existing subscription:', existingSubscription.id);
     // Update existing subscription
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({
         plan_type: planType,
@@ -199,8 +270,14 @@ async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
       })
       .eq('id', existingSubscription.id);
 
-    console.log('Updated subscription for user:', userId);
+    if (error) {
+      console.error('[Webhook] ❌ Error updating subscription:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Updated subscription for user:', userId);
   } else {
+    console.log('[Webhook] Creating new subscription');
     // Create new subscription
     const { error } = await supabaseAdmin.from('subscriptions').insert({
       user_id: userId,
@@ -212,80 +289,112 @@ async function handlePaymentSuccess(data: DodoWebhookPayload['data']) {
     });
 
     if (error) {
-      console.error('Error creating subscription:', error);
-      return;
+      console.error('[Webhook] ❌ Error creating subscription:', error);
+      throw error;
     }
 
-    console.log('Created subscription for user:', userId, 'Plan:', planType);
+    console.log('[Webhook] ✓ Created subscription for user:', userId, 'Plan:', planType);
   }
 }
 
 async function handlePaymentFailed(data: DodoWebhookPayload['data']) {
-  console.log('Payment failed:', data.payment_id);
+  console.log('[Webhook] Payment failed:', data.payment_id);
   // Optionally log failed payments for analytics
 }
 
 async function handleSubscriptionCancelled(data: DodoWebhookPayload['data']) {
+  console.log('[Webhook] Processing subscription cancellation...');
   const { client_reference_id, payment_id } = data;
+  const supabaseAdmin = getSupabaseAdmin();
 
   if (client_reference_id) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('user_id', client_reference_id)
       .eq('status', 'active');
 
-    console.log('Cancelled subscription for user:', client_reference_id);
+    if (error) {
+      console.error('[Webhook] ❌ Error cancelling subscription:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Cancelled subscription for user:', client_reference_id);
   } else if (payment_id) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({ status: 'cancelled', updated_at: new Date().toISOString() })
       .eq('dodo_payment_id', payment_id);
 
-    console.log('Cancelled subscription for payment:', payment_id);
+    if (error) {
+      console.error('[Webhook] ❌ Error cancelling subscription:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Cancelled subscription for payment:', payment_id);
   }
 }
 
 async function handleRefund(data: DodoWebhookPayload['data']) {
+  console.log('[Webhook] Processing refund...');
   const { payment_id } = data;
+  const supabaseAdmin = getSupabaseAdmin();
 
   // Mark subscription as refunded/cancelled
-  await supabaseAdmin
+  const { error } = await supabaseAdmin
     .from('subscriptions')
     .update({ status: 'refunded', updated_at: new Date().toISOString() })
     .eq('dodo_payment_id', payment_id);
 
-  console.log('Processed refund for payment:', payment_id);
+  if (error) {
+    console.error('[Webhook] ❌ Error processing refund:', error);
+    throw error;
+  }
+
+  console.log('[Webhook] ✓ Processed refund for payment:', payment_id);
 }
 
 async function handleSubscriptionOnHold(data: DodoWebhookPayload['data']) {
+  console.log('[Webhook] Processing subscription on hold...');
   const { client_reference_id, payment_id } = data;
+  const supabaseAdmin = getSupabaseAdmin();
 
   if (client_reference_id) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({ status: 'on_hold', updated_at: new Date().toISOString() })
       .eq('user_id', client_reference_id)
       .eq('status', 'active');
 
-    console.log('Put subscription on hold for user:', client_reference_id);
+    if (error) {
+      console.error('[Webhook] ❌ Error putting subscription on hold:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Put subscription on hold for user:', client_reference_id);
   } else if (payment_id) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({ status: 'on_hold', updated_at: new Date().toISOString() })
       .eq('dodo_payment_id', payment_id);
 
-    console.log('Put subscription on hold for payment:', payment_id);
+    if (error) {
+      console.error('[Webhook] ❌ Error putting subscription on hold:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Put subscription on hold for payment:', payment_id);
   }
 }
 
 async function handleSubscriptionPlanChanged(data: DodoWebhookPayload['data']) {
+  console.log('[Webhook] Processing subscription plan change...');
   const { product_id, client_reference_id, payment_id } = data;
 
   // Get new plan type from product ID
   const planType = PRODUCT_TO_PLAN[product_id];
   if (!planType) {
-    console.error('Unknown product ID:', product_id);
+    console.error('[Webhook] ❌ Unknown product ID:', product_id);
     return;
   }
 
@@ -301,8 +410,10 @@ async function handleSubscriptionPlanChanged(data: DodoWebhookPayload['data']) {
     expiresAt.setFullYear(expiresAt.getFullYear() + 1);
   }
 
+  const supabaseAdmin = getSupabaseAdmin();
+
   if (client_reference_id) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({
         plan_type: planType,
@@ -312,9 +423,14 @@ async function handleSubscriptionPlanChanged(data: DodoWebhookPayload['data']) {
       .eq('user_id', client_reference_id)
       .eq('status', 'active');
 
-    console.log('Changed subscription plan for user:', client_reference_id, 'to:', planType);
+    if (error) {
+      console.error('[Webhook] ❌ Error changing subscription plan:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Changed subscription plan for user:', client_reference_id, 'to:', planType);
   } else if (payment_id) {
-    await supabaseAdmin
+    const { error } = await supabaseAdmin
       .from('subscriptions')
       .update({
         plan_type: planType,
@@ -323,7 +439,12 @@ async function handleSubscriptionPlanChanged(data: DodoWebhookPayload['data']) {
       })
       .eq('dodo_payment_id', payment_id);
 
-    console.log('Changed subscription plan for payment:', payment_id, 'to:', planType);
+    if (error) {
+      console.error('[Webhook] ❌ Error changing subscription plan:', error);
+      throw error;
+    }
+
+    console.log('[Webhook] ✓ Changed subscription plan for payment:', payment_id, 'to:', planType);
   }
 }
 

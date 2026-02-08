@@ -34,8 +34,15 @@ export async function initiateCheckout(planType: PlanType, userId: string) {
   // Add user_id as a custom parameter to the checkout URL
   const checkoutUrl = new URL(plan.checkoutUrl);
   checkoutUrl.searchParams.set('client_reference_id', userId);
-  checkoutUrl.searchParams.set('success_url', `${window.location.origin}/payment/success?plan=${planType}`);
-  checkoutUrl.searchParams.set('cancel_url', `${window.location.origin}/dashboard/upgrade`);
+  
+  // Set success and cancel URLs
+  const baseUrl = typeof window !== 'undefined' ? window.location.origin : 'https://neural-wave.vercel.app';
+  checkoutUrl.searchParams.set('success_url', `${baseUrl}/payment/success?plan=${planType}`);
+  checkoutUrl.searchParams.set('cancel_url', `${baseUrl}/dashboard/upgrade`);
+  
+  console.log('[Payment] Checkout URL:', checkoutUrl.toString());
+  console.log('[Payment] User ID:', userId);
+  console.log('[Payment] Plan:', planType);
   
   // Open checkout in same window
   window.location.href = checkoutUrl.toString();
