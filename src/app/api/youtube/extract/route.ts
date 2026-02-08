@@ -13,7 +13,7 @@ const DOWNLOAD_TIMEOUT_MS = 120000;
 const MAX_AUDIO_SIZE_BYTES = 60 * 1024 * 1024;
 const AUDIO_EXTENSIONS = ['.mp3', '.m4a', '.mp4', '.webm', '.opus'] as const;
 const ERROR_LOG_SNIPPET_LENGTH = 800;
-const EXTRACTION_PIPELINE_VERSION = 'youtubei-piped-cobalt-embed-v6-2026-02-07';
+const EXTRACTION_PIPELINE_VERSION = 'proxy-youtubei-cobalt-piped-embed-v7-2026-02-08';
 const YOUTUBEI_PLAYER_ENDPOINT = 'https://www.youtube.com/youtubei/v1/player?prettyPrint=false';
 const YOUTUBE_EMBED_ENDPOINT = 'https://www.youtube.com/embed';
 const PIPED_INSTANCES_ENDPOINT = 'https://piped-instances.kavin.rocks/';
@@ -584,6 +584,60 @@ function createCookiesFile(tempDir: string): { cookieFile: string | null; should
   return { cookieFile: null, shouldCleanup: false };
 }
 
+function parseCookiesForHeader(): string | null {
+  const raw = process.env.YOUTUBE_COOKIES?.trim();
+  if (!raw) return null;
+
+  const pairs: string[] = [];
+  for (const line of raw.split('\n')) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith('#')) continue;
+    const parts = trimmed.split('\t');
+    if (parts.length >= 7) {
+      const name = parts[5];
+      const value = parts[6];
+      if (name && value) pairs.push(`${name}=${value}`);
+    }
+  }
+
+  return pairs.length > 0 ? pairs.join('; ') : null;
+}
+
+function getProxyConfig(): { url: string; secret: string } | null {
+  const url = process.env.CF_WORKER_PROXY_URL?.trim();
+  if (!url) return null;
+  return { url: url.replace(/\/+$/, ''), secret: process.env.CF_WORKER_SECRET?.trim() || '' };
+}
+
+async function fetchViaProxy(
+  targetUrl: string,
+  options: { method?: string; headers?: Record<string, string>; body?: string; stream?: boolean }
+): Promise<Response> {
+  const proxy = getProxyConfig();
+  if (!proxy) throw new Error('No proxy configured');
+
+  const proxyHeaders: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (proxy.secret) proxyHeaders['X-Worker-Secret'] = proxy.secret;
+
+  const resp = await fetch(proxy.url, {
+    method: 'POST',
+    headers: proxyHeaders,
+    body: JSON.stringify({
+      targetUrl,
+      method: options.method || 'GET',
+      headers: options.headers || {},
+      body: options.body,
+      stream: options.stream || false,
+    }),
+  });
+
+  if (!resp.ok && resp.status === 401) {
+    throw new Error('Proxy auth failed — check CF_WORKER_SECRET');
+  }
+
+  return resp;
+}
+
 function inferExtensionFromMimeType(mimeType: string | undefined): '.mp4' | '.webm' {
   if (!mimeType) return '.mp4';
   return mimeType.toLowerCase().includes('webm') ? '.webm' : '.mp4';
@@ -886,25 +940,42 @@ async function getYouTubeiClientStreamCandidates(
 async function fetchYouTubeiPlayerResponse(
   videoId: string,
   watchUrl: string,
-  client: YouTubeiClientProfile
+  client: YouTubeiClientProfile,
+  options?: { useProxy?: boolean }
 ): Promise<YouTubeiPlayerResponse> {
-  const response = await fetch(YOUTUBEI_PLAYER_ENDPOINT, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'User-Agent': client.userAgent,
-      Referer: watchUrl,
-      Origin: 'https://www.youtube.com',
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    'User-Agent': client.userAgent,
+    Referer: watchUrl,
+    Origin: 'https://www.youtube.com',
+  };
+
+  const cookieHeader = parseCookiesForHeader();
+  if (cookieHeader) headers.Cookie = cookieHeader;
+
+  const bodyStr = JSON.stringify({
+    context: {
+      client: client.client,
+      ...(client.playbackContext ? { playbackContext: client.playbackContext } : {}),
+      ...(client.thirdParty ? { thirdParty: client.thirdParty } : {}),
     },
-    body: JSON.stringify({
-      context: {
-        client: client.client,
-        ...(client.playbackContext ? { playbackContext: client.playbackContext } : {}),
-        ...(client.thirdParty ? { thirdParty: client.thirdParty } : {}),
-      },
-      videoId,
-    }),
+    videoId,
   });
+
+  let response: Response;
+  if (options?.useProxy && getProxyConfig()) {
+    response = await fetchViaProxy(YOUTUBEI_PLAYER_ENDPOINT, {
+      method: 'POST',
+      headers,
+      body: bodyStr,
+    });
+  } else {
+    response = await fetch(YOUTUBEI_PLAYER_ENDPOINT, {
+      method: 'POST',
+      headers,
+      body: bodyStr,
+    });
+  }
 
   if (!response.ok) {
     throw new Error(`YouTubei HTTP ${response.status}`);
@@ -926,6 +997,100 @@ async function downloadFromYouTubeiMediaUrl(
     preferredExtension: extension,
     sourceLabel: 'youtubei',
   });
+}
+
+async function downloadViaProxy(
+  mediaUrl: string,
+  outputTemplate: string,
+  options?: { watchUrl?: string; userAgent?: string; preferredExtension?: string }
+): Promise<string> {
+  const headers: Record<string, string> = {
+    'User-Agent': options?.userAgent || 'Mozilla/5.0',
+  };
+  if (options?.watchUrl) {
+    headers.Referer = options.watchUrl;
+    headers.Origin = 'https://www.youtube.com';
+  }
+
+  const response = await fetchViaProxy(mediaUrl, {
+    method: 'GET',
+    headers,
+    stream: true,
+  });
+
+  if (!response.ok) {
+    throw new Error(`Proxied download HTTP ${response.status}`);
+  }
+
+  const declaredSize = parseContentLength(response.headers.get('content-length') ?? undefined);
+  if (declaredSize > MAX_AUDIO_SIZE_BYTES) {
+    throw new ApiError('Video is too long. Please use videos under 30 minutes.', 400, 'VIDEO_TOO_LARGE');
+  }
+
+  const mediaBytes = Buffer.from(await response.arrayBuffer());
+  if (mediaBytes.length === 0) throw new Error('Proxied download returned empty media');
+  if (mediaBytes.length > MAX_AUDIO_SIZE_BYTES) {
+    throw new ApiError('Video is too long. Please use videos under 30 minutes.', 400, 'VIDEO_TOO_LARGE');
+  }
+
+  const extension = pickOutputExtension(
+    options?.preferredExtension,
+    mediaUrl,
+    response.headers.get('content-type')
+  );
+  const outputFile = outputTemplate.replace('.%(ext)s', extension);
+  fs.writeFileSync(outputFile, mediaBytes);
+  return outputFile;
+}
+
+async function downloadWithProxiedYouTubei(
+  videoId: string,
+  watchUrl: string,
+  outputTemplate: string
+): Promise<string | null> {
+  if (!getProxyConfig()) return null;
+
+  for (const client of YOUTUBEI_CLIENTS) {
+    try {
+      console.log(`[Server] Proxied YouTubei strategy: ${client.label}`);
+      const playerResponse = await fetchYouTubeiPlayerResponse(videoId, watchUrl, client, { useProxy: true });
+      const status = playerResponse.playabilityStatus?.status || 'UNKNOWN';
+
+      if (status !== 'OK') {
+        console.warn(`[Server] Proxied YouTubei ${client.label} not playable: ${status}`);
+        continue;
+      }
+
+      const candidates = extractYouTubeiStreamCandidates(playerResponse, `proxied-youtubei:${client.label}`);
+      if (candidates.length === 0) {
+        console.warn(`[Server] Proxied YouTubei ${client.label} returned no candidates`);
+        continue;
+      }
+
+      console.log(`[Server] Proxied YouTubei ${client.label}: ${candidates.length} candidates`);
+      for (const candidate of candidates) {
+        try {
+          const outputFile = await downloadViaProxy(candidate.url, outputTemplate, {
+            watchUrl,
+            userAgent: client.userAgent,
+            preferredExtension: candidate.ext,
+          });
+          console.log(`[Server] Proxied YouTubei download success (${client.label}, itag=${candidate.formatId})`);
+          return outputFile;
+        } catch (candidateError) {
+          if (candidateError instanceof ApiError) throw candidateError;
+          console.warn(
+            `[Server] Proxied YouTubei candidate failed (${client.label}, itag=${candidate.formatId}) | ${getErrorSnippet(getErrorText(candidateError))}`
+          );
+        }
+      }
+    } catch (error) {
+      if (error instanceof ApiError) throw error;
+      console.warn(`[Server] Proxied YouTubei failed for ${client.label} | ${getErrorSnippet(getErrorText(error))}`);
+    }
+  }
+
+  return null;
 }
 
 async function fetchPipedApis(): Promise<string[]> {
@@ -1896,14 +2061,18 @@ export async function POST(request: NextRequest) {
     cookieFile = cookieConfig.cookieFile;
     shouldCleanupCookieFile = cookieConfig.shouldCleanup;
 
-    audioFile = await downloadWithYouTubeiDirect(videoId, normalizedUrl, outputTemplate);
+    audioFile = await downloadWithProxiedYouTubei(videoId, normalizedUrl, outputTemplate);
+
+    if (!audioFile) {
+      audioFile = await tryDownloadWithCobalt(normalizedUrl, outputTemplate);
+    }
 
     if (!audioFile) {
       audioFile = await tryDownloadWithPiped(videoId, normalizedUrl, outputTemplate);
     }
 
     if (!audioFile) {
-      audioFile = await tryDownloadWithCobalt(normalizedUrl, outputTemplate);
+      audioFile = await downloadWithYouTubeiDirect(videoId, normalizedUrl, outputTemplate);
     }
 
     if (!audioFile) {

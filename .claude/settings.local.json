@@ -4,7 +4,13 @@
       "Bash(npx tsc:*)",
       "Bash(npm run build)",
       "Bash(dir:*)",
-      "Bash(npm install:*)"
+      "Bash(npm install:*)",
+      "WebSearch",
+      "WebFetch(domain:sumitkolhe.gitbook.io)",
+      "WebFetch(domain:saavnapi-nine.vercel.app)",
+      "WebFetch(domain:github.com)",
+      "WebFetch(domain:cyberboysumanjay.github.io)",
+      "WebFetch(domain:saavn.dev)"
     ]
   }
 }
