@@ -29,6 +29,7 @@ function generateId(): string {
 
 const MP3_STORAGE_BITRATE = 128;
 const MP3_FRAME_SIZE = 1152;
+const MP3_STORAGE_YIELD_EVERY_FRAMES = 200;
 
 function yieldToMainThread(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
@@ -51,20 +52,28 @@ async function encodeAudioBufferToMp3(buffer: AudioBuffer): Promise<Uint8Array> 
   const chunks: Uint8Array[] = [];
   let totalLength = 0;
 
+  const leftFrameBuffer = new Int16Array(MP3_FRAME_SIZE);
+  const rightFrameBuffer = new Int16Array(MP3_FRAME_SIZE);
+
   for (let i = 0; i < buffer.length; i += MP3_FRAME_SIZE) {
     const frameLength = Math.min(MP3_FRAME_SIZE, buffer.length - i);
-    const leftFrame = new Int16Array(frameLength);
 
     for (let j = 0; j < frameLength; j++) {
-      leftFrame[j] = floatToInt16Sample(leftChannel[i + j]);
+      leftFrameBuffer[j] = floatToInt16Sample(leftChannel[i + j]);
     }
 
     let encodedFrame: Uint8Array;
+    const leftFrame = frameLength === MP3_FRAME_SIZE
+      ? leftFrameBuffer
+      : leftFrameBuffer.subarray(0, frameLength);
+
     if (channelCount > 1) {
-      const rightFrame = new Int16Array(frameLength);
       for (let j = 0; j < frameLength; j++) {
-        rightFrame[j] = floatToInt16Sample(rightChannel[i + j]);
+        rightFrameBuffer[j] = floatToInt16Sample(rightChannel[i + j]);
       }
+      const rightFrame = frameLength === MP3_FRAME_SIZE
+        ? rightFrameBuffer
+        : rightFrameBuffer.subarray(0, frameLength);
       encodedFrame = encoder.encodeBuffer(leftFrame, rightFrame);
     } else {
       encodedFrame = encoder.encodeBuffer(leftFrame);
@@ -76,7 +85,7 @@ async function encodeAudioBufferToMp3(buffer: AudioBuffer): Promise<Uint8Array> 
       totalLength += chunk.length;
     }
 
-    if ((i / MP3_FRAME_SIZE) % 20 === 0) {
+    if ((i / MP3_FRAME_SIZE) % MP3_STORAGE_YIELD_EVERY_FRAMES === 0) {
       await yieldToMainThread();
     }
   }

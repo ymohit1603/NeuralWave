@@ -86,6 +86,10 @@ function yieldToMainThread(): Promise<void> {
   return new Promise(resolve => setTimeout(resolve, 0));
 }
 
+const DOWNLOAD_MP3_BITRATE = 192;
+const MP3_FRAME_SIZE = 1152;
+const MP3_YIELD_EVERY_FRAMES = 200;
+
 /**
  * Main audio processing function - Beat-synchronized 8D conversion
  */
@@ -378,7 +382,7 @@ export function exportAsWAV(audioBuffer: AudioBuffer, fileName: string): void {
 
 /**
  * Export audio buffer as MP3 file
- * Uses 320kbps bitrate for better preservation of spatial cues
+ * Uses high bitrate for good quality with faster encoding than 320kbps
  */
 export async function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): Promise<void> {
   console.log('[ExportMP3] Starting MP3 export...');
@@ -392,35 +396,50 @@ export async function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): P
   try {
     const startTime = performance.now();
     
-    // Convert AudioBuffer to MP3 using lamejs (high-bitrate to preserve spatial detail)
+    // Convert AudioBuffer to MP3 using lamejs
     console.log('[ExportMP3] Creating MP3 encoder...');
-    const mp3encoder = new lamejs.Mp3Encoder(audioBuffer.numberOfChannels, audioBuffer.sampleRate, 320);
+    console.log(`[ExportMP3] Bitrate: ${DOWNLOAD_MP3_BITRATE} kbps`);
+    const channelCount = Math.min(2, Math.max(1, audioBuffer.numberOfChannels));
+    const mp3encoder = new lamejs.Mp3Encoder(channelCount, audioBuffer.sampleRate, DOWNLOAD_MP3_BITRATE);
     const mp3Data: Uint8Array[] = [];
-    
-    const sampleBlockSize = 1152; // Standard MP3 frame size
-    
+
     // Get channel data
     console.log('[ExportMP3] Getting channel data...');
     const leftChannel = audioBuffer.getChannelData(0);
-    const rightChannel = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
+    const rightChannel = channelCount > 1 ? audioBuffer.getChannelData(1) : leftChannel;
     
     // Encode in chunks
     console.log('[ExportMP3] Encoding to MP3...');
-    const totalChunks = Math.ceil(leftChannel.length / sampleBlockSize);
+    const totalChunks = Math.ceil(leftChannel.length / MP3_FRAME_SIZE);
     let encodedChunks = 0;
     const progressInterval = Math.max(1, Math.ceil(totalChunks / 10));
-    
-    for (let i = 0; i < leftChannel.length; i += sampleBlockSize) {
-      const frameLength = Math.min(sampleBlockSize, leftChannel.length - i);
-      const leftChunk = new Int16Array(frameLength);
-      const rightChunk = new Int16Array(frameLength);
+
+    // Reuse frame buffers to reduce allocation/GC overhead during long exports.
+    const leftFrameBuffer = new Int16Array(MP3_FRAME_SIZE);
+    const rightFrameBuffer = new Int16Array(MP3_FRAME_SIZE);
+
+    for (let i = 0; i < leftChannel.length; i += MP3_FRAME_SIZE) {
+      const frameLength = Math.min(MP3_FRAME_SIZE, leftChannel.length - i);
 
       for (let j = 0; j < frameLength; j++) {
-        leftChunk[j] = floatToInt16Sample(leftChannel[i + j]);
-        rightChunk[j] = floatToInt16Sample(rightChannel[i + j]);
+        leftFrameBuffer[j] = floatToInt16Sample(leftChannel[i + j]);
+        rightFrameBuffer[j] = floatToInt16Sample(rightChannel[i + j]);
       }
 
-      const mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+      const leftChunk = frameLength === MP3_FRAME_SIZE
+        ? leftFrameBuffer
+        : leftFrameBuffer.subarray(0, frameLength);
+
+      let mp3buf: Uint8Array;
+      if (channelCount > 1) {
+        const rightChunk = frameLength === MP3_FRAME_SIZE
+          ? rightFrameBuffer
+          : rightFrameBuffer.subarray(0, frameLength);
+        mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+      } else {
+        mp3buf = mp3encoder.encodeBuffer(leftChunk);
+      }
+
       if (mp3buf.length > 0) {
         mp3Data.push(mp3buf);
       }
@@ -433,7 +452,7 @@ export async function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): P
       }
 
       // Yield periodically so UI animations (spinner/progress) stay responsive.
-      if (encodedChunks % 20 === 0) {
+      if (encodedChunks % MP3_YIELD_EVERY_FRAMES === 0) {
         await yieldToMainThread();
       }
     }
