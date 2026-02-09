@@ -69,7 +69,7 @@ export function DebugPanel() {
   if (!isOpen) return null;
 
   return (
-    <div className="fixed bottom-4 right-4 w-96 max-h-[600px] z-50 glass-card border border-primary/20 rounded-xl shadow-2xl overflow-hidden">
+    <div className="fixed bottom-4 right-4 w-96 max-h-[600px] z-50 bg-white border border-border rounded-xl shadow-2xl overflow-hidden">
       {/* Header */}
       <div className="flex items-center justify-between p-4 border-b border-border/50 bg-secondary/50">
         <h3 className="font-semibold text-sm">Debug Panel</h3>

@@ -112,7 +112,7 @@ export function AuthModal({
       <DialogContent className="sm:max-w-md" hideCloseButton ariaTitle={title || defaultTitle}>
         <DialogHeader>
           <div className="flex justify-center mb-4">
-            <div className="p-3 rounded-2xl bg-gradient-to-br from-primary to-accent">
+            <div className="p-3 rounded-2xl bg-primary">
               <Brain className="w-8 h-8 text-white" />
             </div>
           </div>
@@ -250,7 +250,7 @@ export function AuthModal({
             {mode === 'signup' ? 'Already have an account?' : "Don't have an account?"}{' '}
             <button
               onClick={toggleMode}
-              className="text-primary hover:underline font-medium"
+              className="text-foreground hover:underline font-medium"
               disabled={loading}
             >
               {mode === 'signup' ? 'Sign in' : 'Sign up'}

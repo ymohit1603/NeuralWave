@@ -12,7 +12,7 @@ import { ProcessingOverlay } from "@/components/ProcessingOverlay";
 import { useUserPreferences } from "@/hooks/useUserPreferences";
 import { useAuth } from "@/contexts/AuthContext";
 import { useSavedTracks } from "@/hooks/useSavedTracks";
-import { Brain, Sparkles, Music, TrendingUp, Play, Clock, ChevronRight, Loader2 } from "lucide-react";
+import { Brain, Music, TrendingUp, Play, Clock, ChevronRight, Loader2 } from "lucide-react";
 import { useToast } from "@/hooks/use-toast";
 import { trackEvent } from "@/lib/analytics";
 import { posthogEvents } from "@/lib/posthog";
@@ -97,6 +97,7 @@ export default function Dashboard() {
   useEffect(() => {
     router.prefetch('/dashboard/tracks');
     router.prefetch('/dashboard/upgrade');
+    router.prefetch('/dashboard/settings');
   }, [router]);
 
   // Persist the last active track so returning to Home restores player state
@@ -508,12 +509,12 @@ export default function Dashboard() {
 
       <main className="flex-1 overflow-auto w-full">
         {/* Mobile Menu Bar - Only visible on mobile */}
-        <div className="lg:hidden sticky top-0 z-20 glass-card border-b border-primary/10 h-14">
+        <div className="lg:hidden sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-border h-14">
           {/* Hamburger menu button space - button is rendered by Sidebar component */}
         </div>
 
         {/* Header Content - Below menu bar on mobile, normal on desktop */}
-        <header className="glass-card border-b border-primary/10 lg:sticky lg:top-0 lg:z-10">
+        <header className="bg-white/80 backdrop-blur-xl border-b border-border lg:sticky lg:top-0 lg:z-10">
           <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -536,30 +537,30 @@ export default function Dashboard() {
           )}
           {/* Neural profile summary */}
           {preferences.hasCompletedQuiz && (
-            <div className="mb-6 sm:mb-8 p-3 sm:p-4 rounded-2xl glass-card border border-primary/20 animate-fade-in">
+            <div className="mb-6 sm:mb-8 p-3 sm:p-4 rounded-2xl bg-card border border-border animate-fade-in">
               <div className="flex items-center gap-3 sm:gap-4">
-                <div className="p-2 sm:p-3 rounded-xl bg-gradient-to-br from-primary to-accent flex-shrink-0">
+                <div className="p-2 sm:p-3 rounded-xl bg-primary flex-shrink-0">
                   <Brain className="w-4 h-4 sm:w-5 sm:h-5 text-white" />
                 </div>
                 <div className="flex-1 min-w-0">
                   <h3 className="font-semibold text-sm sm:text-base">Your Neural Profile</h3>
                   <p className="text-xs sm:text-sm text-muted-foreground">
                     Optimized for{" "}
-                    <span className="text-accent font-medium">{preferences.goal}</span>
+                    <span className="text-foreground font-medium">{preferences.goal}</span>
                     {preferences.hasADHD === "yes" && " • ADHD-enhanced"}
                     {" • "}
                     <span className="capitalize">{preferences.intensity}</span>
                   </p>
                 </div>
-                <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-accent flex-shrink-0" />
+                <TrendingUp className="w-4 h-4 sm:w-5 sm:h-5 text-muted-foreground flex-shrink-0" />
               </div>
             </div>
           )}
 
           {/* Loading track indicator */}
           {isLoadingTrack && (
-            <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20 mb-6">
-              <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
+            <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border mb-6">
+              <Loader2 className="w-8 h-8 text-foreground animate-spin mb-4" />
               <p className="text-muted-foreground">Loading your track...</p>
             </div>
           )}
@@ -619,7 +620,7 @@ export default function Dashboard() {
                   <button
                     key={track.id}
                     onClick={() => router.push(`/dashboard?track=${track.id}`)}
-                    className="flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl glass-card border border-white/5 hover:border-primary/20 transition-all text-left w-full group"
+                    className="flex items-center gap-3 sm:gap-4 p-3 sm:p-4 rounded-xl bg-card border border-border hover:border-foreground/15 transition-all text-left w-full group"
                   >
                     {/* Thumbnail */}
                     <div className="relative w-12 h-12 sm:w-14 sm:h-14 rounded-lg overflow-hidden flex-shrink-0">
@@ -633,8 +634,8 @@ export default function Dashboard() {
                           }}
                         />
                       ) : null}
-                      <div className={`${track.thumbnail ? 'hidden' : ''} absolute inset-0 bg-gradient-to-br from-primary/20 to-accent/20 flex items-center justify-center`}>
-                        <Sparkles className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
+                      <div className={`${track.thumbnail ? 'hidden' : ''} absolute inset-0 bg-secondary flex items-center justify-center`}>
+                        <Music className="w-4 h-4 sm:w-5 sm:h-5 text-foreground" />
                       </div>
                       {/* Play overlay on hover */}
                       <div className="absolute inset-0 bg-black/50 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
@@ -656,7 +657,7 @@ export default function Dashboard() {
                     </div>
 
                     {/* Play indicator */}
-                    <div className="flex-shrink-0 p-2 rounded-full bg-primary/10 text-primary opacity-0 group-hover:opacity-100 transition-opacity">
+                    <div className="flex-shrink-0 p-2 rounded-full bg-secondary text-foreground opacity-0 group-hover:opacity-100 transition-opacity">
                       <Play className="w-4 h-4" />
                     </div>
                   </button>
@@ -667,9 +668,9 @@ export default function Dashboard() {
 
           {/* Empty state for new users */}
           {processingState === "idle" && !isLoadingTrack && recentTracks.length === 0 && preferences.conversions === 0 && (
-            <div className="mt-8 sm:mt-12 p-6 rounded-2xl glass-card border border-primary/10 text-center">
-              <div className="p-3 rounded-xl bg-gradient-to-br from-primary/20 to-accent/20 w-fit mx-auto mb-4">
-                <Music className="w-6 h-6 text-primary" />
+            <div className="mt-8 sm:mt-12 p-6 rounded-2xl bg-card border border-border text-center">
+              <div className="p-3 rounded-xl bg-secondary w-fit mx-auto mb-4">
+                <Music className="w-6 h-6 text-foreground" />
               </div>
               <h3 className="font-semibold mb-2">Your music library is empty</h3>
               <p className="text-sm text-muted-foreground mb-4">

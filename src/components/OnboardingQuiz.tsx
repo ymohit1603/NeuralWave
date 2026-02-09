@@ -63,7 +63,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
   return (
     <Dialog open={open} onOpenChange={onClose}>
       <DialogContent
-        className="sm:max-w-md p-0 gap-0 bg-card border-primary/20 overflow-hidden"
+        className="sm:max-w-md p-0 gap-0 bg-white border-border overflow-hidden"
         hideCloseButton
         ariaTitle="Personalize Your Experience"
       >
@@ -72,7 +72,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
           <div className={`p-6 transition-opacity duration-300 ${isAnimating ? 'opacity-0' : 'opacity-100'}`}>
             {/* Header */}
             <div className="text-center mb-6">
-              <div className="inline-flex p-3 rounded-2xl bg-gradient-to-br from-primary to-accent mb-4">
+              <div className="inline-flex p-3 rounded-2xl bg-primary mb-4">
                 <Brain className="w-8 h-8 text-white" />
               </div>
               <DialogTitle className="text-2xl font-bold mb-2">
@@ -89,7 +89,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
                 <button
                   key={option.value}
                   onClick={() => handleGoalSelect(option.value)}
-                  className="group p-4 rounded-xl border border-border hover:border-primary/50 bg-card hover:bg-primary/5 transition-all duration-200 text-left"
+                  className="group p-4 rounded-xl border border-border hover:border-foreground/20 bg-card hover:bg-secondary transition-all duration-200 text-left"
                 >
                   <div className={`w-10 h-10 rounded-lg bg-gradient-to-br ${option.color} flex items-center justify-center mb-3 group-hover:scale-110 transition-transform`}>
                     <option.icon className="w-5 h-5 text-white" />
@@ -114,7 +114,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
         {step === 1 && (
           <div className={`p-6 transition-opacity duration-300 ${isAnimating ? 'opacity-0' : 'opacity-100'}`}>
             <div className="text-center mb-6">
-              <div className="inline-flex p-3 rounded-2xl bg-gradient-to-br from-primary to-accent mb-4">
+              <div className="inline-flex p-3 rounded-2xl bg-primary mb-4">
                 <Sparkles className="w-8 h-8 text-white" />
               </div>
               <DialogTitle className="text-2xl font-bold mb-2">
@@ -134,13 +134,13 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
                 <button
                   key={option.value}
                   onClick={() => handleADHDSelect(option.value)}
-                  className="w-full p-4 rounded-xl border border-border hover:border-primary/50 bg-card hover:bg-primary/5 transition-all duration-200 text-left flex items-center justify-between group"
+                  className="w-full p-4 rounded-xl border border-border hover:border-foreground/20 bg-card hover:bg-secondary transition-all duration-200 text-left flex items-center justify-between group"
                 >
                   <div>
                     <p className="font-semibold">{option.label}</p>
                     <p className="text-xs text-muted-foreground">{option.desc}</p>
                   </div>
-                  <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-primary group-hover:translate-x-1 transition-all" />
+                  <ArrowRight className="w-5 h-5 text-muted-foreground group-hover:text-foreground group-hover:translate-x-1 transition-all" />
                 </button>
               ))}
             </div>
@@ -158,7 +158,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
         {step === 2 && (
           <div className={`p-6 transition-opacity duration-300 ${isAnimating ? 'opacity-0' : 'opacity-100'}`}>
             <div className="text-center mb-6">
-              <div className="inline-flex p-3 rounded-2xl bg-gradient-to-br from-primary to-accent mb-4">
+              <div className="inline-flex p-3 rounded-2xl bg-primary mb-4">
                 <Zap className="w-8 h-8 text-white" />
               </div>
               <DialogTitle className="text-2xl font-bold mb-2">
@@ -178,7 +178,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
                 <button
                   key={option.value}
                   onClick={() => handleIntensitySelect(option.value)}
-                  className="w-full p-4 rounded-xl border border-border hover:border-primary/50 bg-card hover:bg-primary/5 transition-all duration-200 text-left flex items-center justify-between group"
+                  className="w-full p-4 rounded-xl border border-border hover:border-foreground/20 bg-card hover:bg-secondary transition-all duration-200 text-left flex items-center justify-between group"
                 >
                   <div>
                     <p className="font-semibold">{option.label}</p>
@@ -190,7 +190,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
                         key={bar}
                         className={`w-2 rounded-full transition-all ${
                           bar <= option.bars
-                            ? 'h-4 bg-gradient-to-t from-primary to-accent'
+                            ? 'h-4 bg-foreground'
                             : 'h-2 bg-muted'
                         }`}
                       />
@@ -216,7 +216,7 @@ export function OnboardingQuiz({ open, onComplete, onClose }: OnboardingQuizProp
               <div
                 key={s}
                 className={`h-1.5 rounded-full transition-all duration-300 ${
-                  s === step ? 'w-8 bg-primary' : s < step ? 'w-4 bg-accent' : 'w-4 bg-muted'
+                  s === step ? 'w-8 bg-foreground' : s < step ? 'w-4 bg-foreground/50' : 'w-4 bg-secondary'
                 }`}
               />
             ))}

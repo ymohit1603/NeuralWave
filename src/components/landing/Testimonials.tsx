@@ -5,6 +5,7 @@ const testimonials = [
     name: "Sarah M.",
     role: "Software Developer",
     avatar: "S",
+    avatarBg: "bg-brand-light text-primary",
     content: "As someone with ADHD, finding focus has always been a struggle. NeuralWave transformed my work sessions - I can actually concentrate for hours now. It's like my brain finally found its rhythm.",
     rating: 5,
   },
@@ -12,6 +13,7 @@ const testimonials = [
     name: "Marcus T.",
     role: "Graduate Student",
     avatar: "M",
+    avatarBg: "bg-accent text-accent-foreground",
     content: "I was skeptical at first, but the difference is undeniable. My study sessions went from 20 frustrating minutes to 3+ hour deep work blocks. This is a game-changer for anyone with focus challenges.",
     rating: 5,
   },
@@ -19,6 +21,7 @@ const testimonials = [
     name: "Emily R.",
     role: "Creative Director",
     avatar: "E",
+    avatarBg: "bg-warm text-amber-700",
     content: "The 8D audio effect is incredible - it's like the music wraps around your brain and quiets everything else. I use it daily and my productivity has never been better.",
     rating: 5,
   },
@@ -26,6 +29,7 @@ const testimonials = [
     name: "David K.",
     role: "Entrepreneur",
     avatar: "D",
+    avatarBg: "bg-brand-light text-primary",
     content: "Finally, something that actually works. I've tried every focus app out there, but NeuralWave is the only one where I can feel the difference immediately. Worth every penny.",
     rating: 5,
   },
@@ -33,52 +37,49 @@ const testimonials = [
 
 export function Testimonials() {
   return (
-    <section className="relative py-24 px-4 overflow-hidden">
-      {/* Background decoration */}
-      <div className="absolute inset-0 mesh-background opacity-30" />
-      
-      <div className="relative max-w-6xl mx-auto">
+    <section className="relative py-24 sm:py-32 px-4">
+      <div className="relative max-w-5xl mx-auto">
         {/* Section header */}
         <div className="text-center mb-16">
-          <div className="inline-flex items-center gap-2 px-4 py-2 mb-4 rounded-full glass-card border border-accent/30">
-            <span className="text-accent font-medium">10,000+ Focus-Optimized Users</span>
-          </div>
-          <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-            Real Results, Real <span className="gradient-text">Focus</span>
+          <p className="text-xs font-semibold text-primary tracking-widest uppercase mb-3">
+            10,000+ Users
+          </p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+            Real results
           </h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
+          <p className="text-base text-muted-foreground max-w-lg mx-auto">
             Join thousands who've transformed their concentration
           </p>
         </div>
 
         {/* Testimonials grid */}
-        <div className="grid md:grid-cols-2 gap-6">
+        <div className="grid md:grid-cols-2 gap-5">
           {testimonials.map((testimonial, index) => (
             <div
               key={testimonial.name}
-              className="group p-6 rounded-2xl glass-card border border-white/5 hover:border-primary/20 transition-all duration-500 animate-fade-up"
+              className="p-6 rounded-2xl bg-card border border-border hover:shadow-md hover:shadow-primary/[0.03] transition-all duration-300 animate-fade-up"
               style={{ animationDelay: `${index * 0.1}s` }}
             >
               {/* Stars */}
-              <div className="flex gap-1 mb-4">
+              <div className="flex gap-0.5 mb-4">
                 {[...Array(testimonial.rating)].map((_, i) => (
-                  <Star key={i} className="w-4 h-4 fill-accent text-accent" />
+                  <Star key={i} className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
                 ))}
               </div>
 
               {/* Content */}
-              <p className="text-foreground/90 leading-relaxed mb-6">
-                "{testimonial.content}"
+              <p className="text-sm text-foreground/80 leading-relaxed mb-6">
+                &ldquo;{testimonial.content}&rdquo;
               </p>
 
               {/* Author */}
               <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center text-sm font-semibold text-white">
+                <div className={`w-9 h-9 rounded-full ${testimonial.avatarBg} flex items-center justify-center text-xs font-semibold`}>
                   {testimonial.avatar}
                 </div>
                 <div>
-                  <div className="font-medium">{testimonial.name}</div>
-                  <div className="text-sm text-muted-foreground">{testimonial.role}</div>
+                  <div className="text-sm font-medium">{testimonial.name}</div>
+                  <div className="text-xs text-muted-foreground">{testimonial.role}</div>
                 </div>
               </div>
             </div>

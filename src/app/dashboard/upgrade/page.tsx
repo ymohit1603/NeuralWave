@@ -92,10 +92,10 @@ export default function UpgradePage() {
       
       <main className="flex-1 overflow-auto">
         {/* Mobile Menu Bar */}
-        <div className="lg:hidden sticky top-0 z-20 glass-card border-b border-primary/10 h-14" />
+        <div className="lg:hidden sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-border h-14" />
 
         {/* Header */}
-        <header className="glass-card border-b border-primary/10 lg:sticky lg:top-0 lg:z-10">
+        <header className="bg-white/80 backdrop-blur-xl border-b border-border lg:sticky lg:top-0 lg:z-10">
           <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -112,7 +112,7 @@ export default function UpgradePage() {
         <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
           {/* Hero Section */}
           <div className="text-center mb-8 sm:mb-12">
-            <div className="inline-flex p-3 sm:p-4 rounded-2xl bg-gradient-to-br from-primary to-accent mb-3 sm:mb-4">
+            <div className="inline-flex p-3 sm:p-4 rounded-2xl bg-primary mb-3 sm:mb-4">
               <Crown className="w-8 h-8 sm:w-12 sm:h-12 text-white" />
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3">
@@ -133,25 +133,25 @@ export default function UpgradePage() {
                 key={plan.id}
                 className={`relative p-4 sm:p-6 rounded-2xl border transition-all ${
                   plan.popular
-                    ? 'glass-card border-primary shadow-lg shadow-primary/20 md:scale-105'
-                    : 'glass-card border-primary/20 hover:border-primary/40'
+                    ? 'bg-card border-foreground shadow-sm md:scale-105'
+                    : 'bg-card border-border hover:border-foreground/15'
                 }`}
               >
                 {/* 90% OFF Badge for Yearly Plan */}
                 {plan.id === 'yearly' && (
-                  <div className="absolute -top-3 -right-3 px-3 py-1.5 rounded-lg bg-gradient-to-r from-red-500 to-orange-500 text-white text-sm font-black shadow-lg animate-pulse-glow z-20">
+                  <div className="absolute -top-3 -right-3 px-3 py-1.5 rounded-lg bg-foreground text-white text-sm font-black shadow-lg z-20">
                     90% OFF
                   </div>
                 )}
                 
                 {plan.popular && (
-                  <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-primary to-accent">
+                  <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-primary">
                     Most Popular
                   </Badge>
                 )}
                 
                 {plan.savings && !plan.popular && plan.id !== 'yearly' && (
-                  <Badge variant="secondary" className="absolute -top-3 left-1/2 -translate-x-1/2 bg-accent text-accent-foreground">
+                  <Badge variant="secondary" className="absolute -top-3 left-1/2 -translate-x-1/2 bg-accent text-foreground-foreground">
                     {plan.savings}
                   </Badge>
                 )}
@@ -163,7 +163,7 @@ export default function UpgradePage() {
                 )}
 
                 {plan.canUpgrade && !plan.current && (
-                  <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-gradient-to-r from-green-500 to-emerald-500">
+                  <Badge className="absolute -top-3 left-1/2 -translate-x-1/2 bg-foreground">
                     Upgrade Available
                   </Badge>
                 )}
@@ -179,7 +179,7 @@ export default function UpgradePage() {
                 <ul className="space-y-2 sm:space-y-3 mb-4 sm:mb-6">
                   {plan.features.map((feature, featureIndex) => (
                     <li key={featureIndex} className="flex items-start gap-2">
-                      <Check className="w-4 h-4 sm:w-5 sm:h-5 text-accent flex-shrink-0 mt-0.5" />
+                      <Check className="w-4 h-4 sm:w-5 sm:h-5 text-foreground flex-shrink-0 mt-0.5" />
                       <span className="text-xs sm:text-sm">{feature}</span>
                     </li>
                   ))}
@@ -210,7 +210,7 @@ export default function UpgradePage() {
           </div>
 
           {/* FAQ */}
-          <div className="mt-8 sm:mt-12 p-4 sm:p-6 rounded-2xl glass-card border border-primary/20">
+          <div className="mt-8 sm:mt-12 p-4 sm:p-6 rounded-2xl bg-card border border-border">
             <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 text-center">
               {hasActiveSubscription ? 'Upgrade Information' : 'Why Upgrade?'}
             </h3>

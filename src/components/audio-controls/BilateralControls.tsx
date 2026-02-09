@@ -118,9 +118,9 @@ export function BilateralControls({
         />
 
         {isEMDR && (
-          <div className="p-3 bg-accent/10 rounded-lg border border-accent/20">
+          <div className="p-3 bg-secondary/50 rounded-lg border border-border">
             <p className="text-xs text-muted-foreground">
-              <strong className="text-accent">EMDR Mode:</strong> Uses hard-cut bilateral
+              <strong className="text-foreground">EMDR Mode:</strong> Uses hard-cut bilateral
               stimulation commonly used in Eye Movement Desensitization and Reprocessing
               therapy. Consult a licensed therapist for therapeutic use.
             </p>

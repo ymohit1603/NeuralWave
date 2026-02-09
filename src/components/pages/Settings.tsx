@@ -77,10 +77,10 @@ export default function Settings() {
 
       <main className="flex-1 overflow-auto">
         {/* Mobile Menu Bar */}
-        <div className="lg:hidden sticky top-0 z-20 glass-card border-b border-primary/10 h-14" />
+        <div className="lg:hidden sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-border h-14" />
 
         {/* Header */}
-        <header className="glass-card border-b border-primary/10 lg:sticky lg:top-0 lg:z-10">
+        <header className="bg-white/80 backdrop-blur-xl border-b border-border lg:sticky lg:top-0 lg:z-10">
           <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
             <h1 className="text-xl sm:text-2xl font-bold">Settings</h1>
             <p className="text-xs sm:text-sm text-muted-foreground">
@@ -93,15 +93,15 @@ export default function Settings() {
           {/* Account Section */}
           <section className="mb-8">
             <div className="flex items-center gap-2 mb-4">
-              <User className="w-5 h-5 text-primary" />
+              <User className="w-5 h-5 text-foreground" />
               <h2 className="text-lg font-semibold">Account</h2>
             </div>
 
-            <div className="p-5 rounded-2xl glass-card border border-primary/20">
+            <div className="p-5 rounded-2xl bg-card border border-border">
               {user ? (
                 <div className="space-y-4">
                   <div className="flex items-center gap-4">
-                    <div className="w-12 h-12 rounded-full bg-gradient-to-br from-primary to-accent flex items-center justify-center flex-shrink-0">
+                    <div className="w-12 h-12 rounded-full bg-primary flex items-center justify-center flex-shrink-0">
                       <span className="text-lg font-semibold text-white">
                         {user.email?.[0].toUpperCase() || 'U'}
                       </span>
@@ -114,7 +114,7 @@ export default function Settings() {
                     </div>
                   </div>
 
-                  <div className="pt-4 border-t border-border/50">
+                  <div className="pt-4 border-t border-border">
                     <Button
                       variant="outline"
                       onClick={handleSignOut}
@@ -139,11 +139,11 @@ export default function Settings() {
           {/* Subscription Section */}
           <section className="mb-8">
             <div className="flex items-center gap-2 mb-4">
-              <Crown className="w-5 h-5 text-primary" />
+              <Crown className="w-5 h-5 text-foreground" />
               <h2 className="text-lg font-semibold">Subscription</h2>
             </div>
 
-            <div className="p-5 rounded-2xl glass-card border border-primary/20">
+            <div className="p-5 rounded-2xl bg-card border border-border">
               <div className="flex items-center justify-between mb-4">
                 <div>
                   <p className="font-medium">Current Plan</p>
@@ -153,7 +153,7 @@ export default function Settings() {
                 </div>
                 <span className={`px-3 py-1 rounded-full text-sm font-medium ${
                   hasActiveSubscription
-                    ? 'bg-accent/20 text-accent'
+                    ? 'bg-secondary text-foreground'
                     : 'bg-muted text-muted-foreground'
                 }`}>
                   {getPlanDisplayName()}
@@ -181,11 +181,11 @@ export default function Settings() {
           {/* Neural Profile Section */}
           <section className="mb-8">
             <div className="flex items-center gap-2 mb-4">
-              <Brain className="w-5 h-5 text-primary" />
+              <Brain className="w-5 h-5 text-foreground" />
               <h2 className="text-lg font-semibold">Neural Profile</h2>
             </div>
 
-            <div className="p-5 rounded-2xl glass-card border border-primary/20">
+            <div className="p-5 rounded-2xl bg-card border border-border">
               {preferences.hasCompletedQuiz ? (
                 <div className="space-y-4">
                   <div className="flex items-center justify-between">
@@ -205,7 +205,7 @@ export default function Settings() {
                     </select>
                   </div>
 
-                  <div className="flex items-center justify-between pt-4 border-t border-border/50">
+                  <div className="flex items-center justify-between pt-4 border-t border-border">
                     <div>
                       <p className="font-medium">ADHD Mode</p>
                       <p className="text-sm text-muted-foreground">Enhanced frequencies for focus</p>
@@ -218,7 +218,7 @@ export default function Settings() {
                     />
                   </div>
 
-                  <div className="flex items-center justify-between pt-4 border-t border-border/50">
+                  <div className="flex items-center justify-between pt-4 border-t border-border">
                     <div>
                       <p className="font-medium">Effect Intensity</p>
                       <p className="text-sm text-muted-foreground capitalize">{preferences.intensity || 'Moderate'}</p>
@@ -249,11 +249,11 @@ export default function Settings() {
           {/* Data Management Section */}
           <section className="mb-8">
             <div className="flex items-center gap-2 mb-4">
-              <Music className="w-5 h-5 text-primary" />
+              <Music className="w-5 h-5 text-foreground" />
               <h2 className="text-lg font-semibold">Data</h2>
             </div>
 
-            <div className="p-5 rounded-2xl glass-card border border-primary/20 space-y-4">
+            <div className="p-5 rounded-2xl bg-card border border-border space-y-4">
               <div className="flex items-center justify-between">
                 <div>
                   <p className="font-medium">Saved Tracks</p>
@@ -271,7 +271,7 @@ export default function Settings() {
                 </Button>
               </div>
 
-              <div className="flex items-center justify-between pt-4 border-t border-border/50">
+              <div className="flex items-center justify-between pt-4 border-t border-border">
                 <div>
                   <p className="font-medium">Total Conversions</p>
                   <p className="text-sm text-muted-foreground">Tracks processed all time</p>
@@ -279,7 +279,7 @@ export default function Settings() {
                 <span className="text-lg font-semibold">{preferences.conversions || 0}</span>
               </div>
 
-              <div className="flex items-center justify-between pt-4 border-t border-border/50">
+              <div className="flex items-center justify-between pt-4 border-t border-border">
                 <div>
                   <p className="font-medium">Reset All Settings</p>
                   <p className="text-sm text-muted-foreground">Clear preferences and start fresh</p>

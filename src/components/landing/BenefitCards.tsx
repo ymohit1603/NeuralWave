@@ -5,33 +5,36 @@ const benefits = [
     icon: Brain,
     title: "Bilateral Brain Activation",
     description: "Stimulate both hemispheres simultaneously with precisely tuned stereo frequencies that create a synchronized neural response.",
-    gradient: "from-primary to-neural-blue",
+    color: "bg-brand-light text-primary",
   },
   {
     icon: Focus,
     title: "ADHD Focus Enhancement",
     description: "Specially designed binaural beats help regulate attention and reduce mental noise, making focus effortless and natural.",
-    gradient: "from-neural-purple to-neural-pink",
+    color: "bg-accent text-accent-foreground",
   },
   {
     icon: Headphones,
     title: "Immersive 8D Experience",
     description: "Audio that moves around your head creates an enveloping soundscape that blocks out distractions and deepens concentration.",
-    gradient: "from-accent to-neural-blue",
+    color: "bg-warm text-amber-700",
   },
 ];
 
 export function BenefitCards() {
   return (
-    <section className="relative py-24 px-4">
-      <div className="max-w-6xl mx-auto">
+    <section className="relative py-24 sm:py-32 px-4">
+      <div className="max-w-5xl mx-auto">
         {/* Section header */}
         <div className="text-center mb-16">
-          <h2 className="text-3xl sm:text-4xl font-bold mb-4">
-            Why Your Brain Will <span className="gradient-text">Thank You</span>
+          <p className="text-xs font-semibold text-primary tracking-widest uppercase mb-3">
+            The Science
+          </p>
+          <h2 className="text-3xl sm:text-4xl font-bold tracking-tight mb-4">
+            Why it works
           </h2>
-          <p className="text-lg text-muted-foreground max-w-2xl mx-auto">
-            Experience audio engineered for maximum cognitive impact
+          <p className="text-base text-muted-foreground max-w-lg mx-auto">
+            Audio engineered for maximum cognitive impact
           </p>
         </div>
 
@@ -40,29 +43,21 @@ export function BenefitCards() {
           {benefits.map((benefit, index) => (
             <div
               key={benefit.title}
-              className="group relative p-8 rounded-2xl glass-card border border-white/5 hover:border-primary/30 transition-all duration-500 animate-fade-up"
+              className="group relative p-8 rounded-2xl bg-card border border-border hover:border-primary/15 hover:shadow-lg hover:shadow-primary/[0.04] transition-all duration-300 animate-fade-up"
               style={{ animationDelay: `${index * 0.1}s` }}
             >
-              {/* Gradient glow on hover */}
-              <div className={`absolute inset-0 rounded-2xl bg-gradient-to-br ${benefit.gradient} opacity-0 group-hover:opacity-10 transition-opacity duration-500`} />
-              
               {/* Icon */}
-              <div className={`relative inline-flex p-4 rounded-xl bg-gradient-to-br ${benefit.gradient} mb-6`}>
-                <benefit.icon className="w-6 h-6 text-white" />
+              <div className={`inline-flex p-3 rounded-xl ${benefit.color} mb-6`}>
+                <benefit.icon className="w-5 h-5" />
               </div>
 
               {/* Content */}
-              <h3 className="relative text-xl font-semibold mb-3 group-hover:text-primary transition-colors duration-300">
+              <h3 className="text-lg font-semibold mb-3">
                 {benefit.title}
               </h3>
-              <p className="relative text-muted-foreground leading-relaxed">
+              <p className="text-sm text-muted-foreground leading-relaxed">
                 {benefit.description}
               </p>
-
-              {/* Decorative corner */}
-              <div className="absolute top-4 right-4 w-20 h-20 opacity-5">
-                <benefit.icon className="w-full h-full" />
-              </div>
             </div>
           ))}
         </div>

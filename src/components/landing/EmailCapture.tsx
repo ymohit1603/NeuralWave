@@ -1,7 +1,7 @@
 import { useState } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { Mail, CheckCircle, X } from "lucide-react";
+import { CheckCircle, X, Mail } from "lucide-react";
 
 interface EmailCaptureProps {
   onSubscribe?: (email: string) => void;
@@ -24,16 +24,16 @@ export function EmailCapture({ onSubscribe }: EmailCaptureProps) {
   if (!isVisible) return null;
 
   return (
-    <div className="fixed bottom-0 left-0 right-0 z-40 p-4 glass-card border-t border-primary/20">
+    <div className="fixed bottom-0 left-0 right-0 z-40 p-4 bg-white/90 backdrop-blur-xl border-t border-border">
       <div className="max-w-4xl mx-auto">
         {isSubmitted ? (
           <div className="flex items-center justify-center gap-3 py-2 animate-fade-in">
-            <CheckCircle className="w-5 h-5 text-accent" />
-            <span className="font-medium">You're in! Check your inbox for focus playlists.</span>
+            <CheckCircle className="w-4 h-4 text-emerald-500" />
+            <span className="text-sm font-medium">You're in! Check your inbox for focus playlists.</span>
           </div>
         ) : (
           <div className="flex flex-col sm:flex-row items-center gap-4">
-            <button 
+            <button
               onClick={() => setIsVisible(false)}
               className="absolute top-2 right-2 sm:static p-1 text-muted-foreground hover:text-foreground transition-colors"
               aria-label="Close"
@@ -42,12 +42,12 @@ export function EmailCapture({ onSubscribe }: EmailCaptureProps) {
             </button>
 
             <div className="flex items-center gap-3 flex-shrink-0">
-              <div className="p-2 rounded-lg bg-primary/20">
-                <Mail className="w-5 h-5 text-primary" />
+              <div className="p-2 rounded-lg bg-brand-light">
+                <Mail className="w-4 h-4 text-primary" />
               </div>
               <div className="text-left">
-                <div className="font-semibold">Get Weekly Focus Playlists</div>
-                <div className="text-sm text-muted-foreground hidden sm:block">
+                <div className="text-sm font-medium">Get Weekly Focus Playlists</div>
+                <div className="text-xs text-muted-foreground hidden sm:block">
                   Curated neural-optimized tracks delivered every Friday
                 </div>
               </div>
@@ -59,10 +59,10 @@ export function EmailCapture({ onSubscribe }: EmailCaptureProps) {
                 placeholder="Enter your email"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
-                className="flex-1 bg-background/50 border-primary/20 focus:border-primary"
+                className="flex-1 bg-secondary border-border"
                 required
               />
-              <Button type="submit" variant="neural" className="whitespace-nowrap">
+              <Button type="submit" variant="default" size="default">
                 Subscribe
               </Button>
             </form>

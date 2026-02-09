@@ -251,17 +251,17 @@ export function AudioUploader({
   return (
     <div className="w-full max-w-full overflow-hidden">
       <Tabs defaultValue="upload" className="w-full">
-        <TabsList className="grid w-full grid-cols-2 bg-secondary/50 p-1 rounded-xl mb-4 sm:mb-6">
+        <TabsList className="grid w-full grid-cols-2 bg-secondary p-1 rounded-xl mb-4 sm:mb-6">
           <TabsTrigger
             value="upload"
-            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
+            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-foreground data-[state=active]:text-background rounded-lg text-xs sm:text-sm px-2 sm:px-3"
           >
             <Upload className="w-3 h-3 sm:w-4 sm:h-4" />
             <span>Upload</span>
           </TabsTrigger>
           <TabsTrigger
             value="search"
-            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-primary data-[state=active]:text-primary-foreground rounded-lg text-xs sm:text-sm px-2 sm:px-3"
+            className="flex items-center gap-1 sm:gap-2 data-[state=active]:bg-foreground data-[state=active]:text-background rounded-lg text-xs sm:text-sm px-2 sm:px-3"
           >
             <Search className="w-3 h-3 sm:w-4 sm:h-4" />
             <span>Search</span>
@@ -279,8 +279,8 @@ export function AudioUploader({
           )}
 
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center p-12 rounded-2xl glass-card border border-primary/20">
-              <Loader2 className="w-12 h-12 text-primary animate-spin mb-4" />
+            <div className="flex flex-col items-center justify-center p-12 rounded-2xl bg-card border border-border">
+              <Loader2 className="w-12 h-12 text-foreground animate-spin mb-4" />
               <p className="text-lg font-medium mb-1">Processing audio file...</p>
               <p className="text-sm text-muted-foreground">Decoding audio data</p>
             </div>
@@ -292,8 +292,8 @@ export function AudioUploader({
               onDrop={handleDrop}
               className={`relative flex flex-col items-center justify-center p-12 rounded-2xl border-2 border-dashed transition-all duration-300 cursor-pointer ${
                 isDragging
-                  ? 'border-primary bg-primary/10 scale-[1.02]'
-                  : 'border-primary/30 hover:border-primary/60 hover:bg-primary/5'
+                  ? 'border-foreground/30 bg-secondary/50 scale-[1.02]'
+                  : 'border-border hover:border-foreground/20 hover:bg-secondary/30'
               }`}
             >
               <input
@@ -303,10 +303,10 @@ export function AudioUploader({
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
 
-              <div className={`p-4 rounded-2xl glass-card border border-primary/20 mb-4 transition-all duration-300 ${
-                isDragging ? 'scale-110 shadow-lg shadow-primary/20' : ''
+              <div className={`p-4 rounded-2xl bg-card border border-border mb-4 transition-all duration-300 ${
+                isDragging ? 'scale-110' : ''
               }`}>
-                <Upload className="w-8 h-8 text-primary" />
+                <Upload className="w-8 h-8 text-foreground" />
               </div>
 
               <p className="text-lg font-medium mb-1">
@@ -342,11 +342,11 @@ export function AudioUploader({
                   }}
                   onFocus={() => setShowSuggestions(true)}
                   disabled={isSearching || isLoadingYouTube}
-                  className="pl-9 sm:pl-11 h-12 sm:h-14 text-sm sm:text-lg bg-secondary/30 border-primary/20 focus:border-primary rounded-xl"
+                  className="pl-9 sm:pl-11 h-12 sm:h-14 text-sm sm:text-lg bg-secondary/30 border-border focus:border-foreground rounded-xl"
                 />
 
                 {showSuggestions && searchSuggestions.length > 0 && (
-                  <div className="absolute top-full left-0 right-0 mt-1 z-20 rounded-xl border border-primary/20 bg-background shadow-lg overflow-hidden">
+                  <div className="absolute top-full left-0 right-0 mt-1 z-20 rounded-xl bg-white border border-border shadow-lg overflow-hidden">
                     {searchSuggestions.map((suggestion) => (
                       <button
                         key={suggestion}
@@ -377,8 +377,8 @@ export function AudioUploader({
 
             {/* Search Results */}
             {isSearching ? (
-              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
-                <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 text-primary animate-spin mb-3 sm:mb-4" />
+              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border">
+                <Loader2 className="w-8 h-8 sm:w-10 sm:h-10 text-foreground animate-spin mb-3 sm:mb-4" />
                 <p className="text-sm sm:text-base font-medium">Searching YouTube...</p>
                 <p className="text-xs sm:text-sm text-muted-foreground">Finding the best matches</p>
               </div>
@@ -391,8 +391,8 @@ export function AudioUploader({
                     disabled={isLoadingYouTube}
                     className={`w-full flex items-center gap-3 sm:gap-4 p-2.5 sm:p-3 rounded-xl border transition-all text-left ${
                       selectedSearchResult?.videoId === result.videoId
-                        ? 'border-primary bg-primary/10 shadow-lg shadow-primary/10'
-                        : 'border-primary/10 hover:border-primary/30 hover:bg-secondary/30'
+                        ? 'border-foreground bg-secondary'
+                        : 'border-border hover:border-foreground/15 hover:bg-secondary/30'
                     } ${isLoadingYouTube && selectedSearchResult?.videoId === result.videoId ? 'opacity-70' : ''}`}
                   >
                     {/* Thumbnail */}
@@ -409,7 +409,7 @@ export function AudioUploader({
                         {result.duration}
                       </div>
                       {isLoadingYouTube && selectedSearchResult?.videoId === result.videoId && (
-                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/70 rounded-lg">
+                        <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/60 rounded-lg">
                           <Loader2 className="w-5 h-5 sm:w-6 sm:h-6 text-white animate-spin mb-1" />
                           <span className="text-[10px] text-white/80">{youtubeProgressLabel}%</span>
                         </div>
@@ -435,8 +435,8 @@ export function AudioUploader({
                     {/* Play indicator */}
                     <div className={`flex-shrink-0 p-1.5 sm:p-2 rounded-full transition-colors ${
                       selectedSearchResult?.videoId === result.videoId
-                        ? 'bg-primary text-primary-foreground'
-                        : 'bg-secondary/50 text-muted-foreground'
+                        ? 'bg-foreground text-background'
+                        : 'bg-secondary text-muted-foreground'
                     }`}>
                       <Music className="w-3 h-3 sm:w-4 sm:h-4" />
                     </div>
@@ -444,21 +444,21 @@ export function AudioUploader({
                 ))}
               </div>
             ) : searchQuery && hasSearched && !isSearching ? (
-              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
+              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border">
                 <Search className="w-8 h-8 sm:w-10 sm:h-10 text-muted-foreground mb-3 sm:mb-4" />
                 <p className="text-sm sm:text-base font-medium">No results found</p>
                 <p className="text-xs sm:text-sm text-muted-foreground text-center">Try a different search term</p>
               </div>
             ) : searchQuery && !hasSearched ? (
-              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
-                <Search className="w-8 h-8 sm:w-10 sm:h-10 text-primary mb-3 sm:mb-4" />
+              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border">
+                <Search className="w-8 h-8 sm:w-10 sm:h-10 text-foreground mb-3 sm:mb-4" />
                 <p className="text-sm sm:text-base font-medium">Click the search button</p>
                 <p className="text-xs sm:text-sm text-muted-foreground text-center">Press search or select a suggestion</p>
               </div>
             ) : (
-              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
-                <div className="p-3 sm:p-4 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/20 mb-3 sm:mb-4">
-                  <Music className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
+              <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border">
+                <div className="p-3 sm:p-4 rounded-2xl bg-secondary mb-3 sm:mb-4">
+                  <Music className="w-6 h-6 sm:w-8 sm:h-8 text-foreground" />
                 </div>
                 <h3 className="text-base sm:text-lg font-semibold mb-1 sm:mb-2">Search for Music</h3>
                 <p className="text-xs sm:text-sm text-muted-foreground text-center max-w-md">

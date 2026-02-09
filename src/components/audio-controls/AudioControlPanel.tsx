@@ -121,7 +121,7 @@ export function AudioControlPanel({
   return (
     <div
       className={cn(
-        'glass-card border border-primary/20 rounded-2xl overflow-hidden',
+        'bg-card border border-border rounded-2xl overflow-hidden',
         'transition-all duration-300',
         className
       )}
@@ -132,8 +132,8 @@ export function AudioControlPanel({
         onClick={() => setIsExpanded(!isExpanded)}
       >
         <div className="flex items-center gap-2 sm:gap-3">
-          <div className="p-1.5 sm:p-2 rounded-lg bg-gradient-to-br from-primary/20 to-accent/20">
-            <Sliders className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
+          <div className="p-1.5 sm:p-2 rounded-lg bg-secondary">
+            <Sliders className="w-4 h-4 sm:w-5 sm:h-5 text-foreground" />
           </div>
           <div>
             <span className="text-sm sm:text-base font-semibold">Audio Controls</span>
@@ -165,7 +165,7 @@ export function AudioControlPanel({
           {/* Mode Selector */}
           <div className="space-y-2">
             <div className="flex items-center gap-2 mb-3">
-              <Sparkles className="w-4 h-4 text-accent" />
+              <Sparkles className="w-4 h-4 text-muted-foreground" />
               <span className="text-xs sm:text-sm font-medium text-muted-foreground">Effect Mode</span>
             </div>
             <EffectModeSelector
@@ -176,9 +176,9 @@ export function AudioControlPanel({
           </div>
 
           {/* Master Volume */}
-          <div className="flex items-center gap-3 p-3 sm:p-4 bg-secondary/30 rounded-xl border border-border/30">
-            <div className="p-2 rounded-lg bg-primary/10">
-              <Volume2 className="w-4 h-4 sm:w-5 sm:h-5 text-primary" />
+          <div className="flex items-center gap-3 p-3 sm:p-4 bg-secondary/50 rounded-xl border border-border">
+            <div className="p-2 rounded-lg bg-secondary">
+              <Volume2 className="w-4 h-4 sm:w-5 sm:h-5 text-foreground" />
             </div>
             <SliderControl
               label={PARAMETER_LABELS.masterVolume.label}

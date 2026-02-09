@@ -192,20 +192,20 @@ export function PaywallModal({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="sm:max-w-2xl max-h-[95vh] p-0 gap-0 bg-card border-primary/20 overflow-hidden flex flex-col" hideCloseButton ariaTitle={content.title}>
+      <DialogContent className="sm:max-w-2xl max-h-[95vh] p-0 gap-0 bg-white border-border overflow-hidden flex flex-col" hideCloseButton ariaTitle={content.title}>
 
         {/* Header */}
         <div className="relative p-4 sm:p-6 pb-4 border-b border-border/50 flex-shrink-0">
-          <div className="absolute inset-0 mesh-background opacity-50" />
+          <div className="absolute inset-0 " />
 
           <div className="relative flex flex-col items-center text-center">
-            <div className="p-2 sm:p-3 rounded-xl bg-gradient-to-br from-primary to-accent mb-2 sm:mb-3 animate-pulse-glow">
+            <div className="p-2 sm:p-3 rounded-xl bg-primary mb-2 sm:mb-3">
               <Brain className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
             </div>
             <h2 className="text-lg sm:text-2xl font-bold mb-1 sm:mb-2">
               {content.title.split(' ').map((word, i) =>
                 word === 'Unlimited' || word === 'Full' || word === 'Pro' ? (
-                  <span key={i} className="gradient-text">{word} </span>
+                  <span key={i} >{word} </span>
                 ) : (
                   <span key={i}>{word} </span>
                 )
@@ -227,8 +227,8 @@ export function PaywallModal({
                 onClick={() => setSelectedPlan("weekly")}
                 className={`p-2 sm:p-4 rounded-xl border-2 transition-all ${
                   selectedPlan === "weekly"
-                    ? "border-primary bg-primary/10 shadow-lg shadow-primary/20"
-                    : "border-border hover:border-primary/50"
+                    ? "border-foreground bg-secondary shadow-sm"
+                    : "border-border hover:border-foreground/20"
                 }`}
               >
                 <div className="text-left">
@@ -243,16 +243,16 @@ export function PaywallModal({
                 onClick={() => setSelectedPlan("yearly")}
                 className={`p-2 sm:p-4 rounded-xl border-2 transition-all relative ${
                   selectedPlan === "yearly"
-                    ? "border-primary bg-primary/10 shadow-lg shadow-primary/20"
-                    : "border-border hover:border-primary/50"
+                    ? "border-foreground bg-secondary shadow-sm"
+                    : "border-border hover:border-foreground/20"
                 }`}
               >
                 {/* 90% OFF Badge - Top Right */}
-                <div className="absolute -top-2 -right-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-gradient-to-r from-red-500 to-orange-500 text-white text-xs sm:text-sm font-black shadow-lg animate-pulse-glow z-10">
+                <div className="absolute -top-2 -right-2 px-2 sm:px-3 py-1 sm:py-1.5 rounded-lg bg-foreground text-white text-xs sm:text-sm font-black shadow-lg z-10">
                   90% OFF
                 </div>
                 {plans.yearly.badge && (
-                  <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 sm:px-2 py-0.5 rounded-lg bg-gradient-to-r from-accent to-primary text-white text-[8px] sm:text-[10px] font-bold shadow-lg whitespace-nowrap">
+                  <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 sm:px-2 py-0.5 rounded-lg bg-foreground text-white text-[8px] sm:text-[10px] font-bold shadow-lg whitespace-nowrap">
                     {plans.yearly.badge}
                   </div>
                 )}
@@ -261,7 +261,7 @@ export function PaywallModal({
                   <div className="flex items-baseline gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
                     <p className="text-base sm:text-xl font-bold">{plans.yearly.displayPrice}</p>
                   </div>
-                  <p className="text-[8px] sm:text-[10px] text-accent font-medium">
+                  <p className="text-[8px] sm:text-[10px] text-foreground font-medium">
                     Save $375
                   </p>
                 </div>
@@ -272,12 +272,12 @@ export function PaywallModal({
                 onClick={() => setSelectedPlan("lifetime")}
                 className={`p-2 sm:p-4 rounded-xl border-2 transition-all relative ${
                   selectedPlan === "lifetime"
-                    ? "border-primary bg-primary/10 shadow-lg shadow-primary/20"
-                    : "border-border hover:border-primary/50"
+                    ? "border-foreground bg-secondary shadow-sm"
+                    : "border-border hover:border-foreground/20"
                 }`}
               >
                 {plans.lifetime.badge && (
-                  <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 sm:px-2 py-0.5 rounded-lg bg-gradient-to-r from-primary to-accent text-white text-[8px] sm:text-[10px] font-bold shadow-lg whitespace-nowrap">
+                  <div className="absolute -top-2 left-1/2 -translate-x-1/2 px-1.5 sm:px-2 py-0.5 rounded-lg bg-foreground text-white text-[8px] sm:text-[10px] font-bold shadow-lg whitespace-nowrap">
                     POPULAR
                   </div>
                 )}
@@ -286,7 +286,7 @@ export function PaywallModal({
                   <div className="flex items-baseline gap-0.5 sm:gap-1 mt-0.5 sm:mt-1">
                     <p className="text-base sm:text-xl font-bold">{plans.lifetime.displayPrice}</p>
                   </div>
-                  <p className="text-[8px] sm:text-[10px] text-accent font-medium">
+                  <p className="text-[8px] sm:text-[10px] text-foreground font-medium">
                     {plans.lifetime.savings}
                   </p>
                 </div>
@@ -306,8 +306,8 @@ export function PaywallModal({
                 "Priority processing speed",
               ].map((feature, i) => (
                 <div key={i} className="flex items-center gap-2">
-                  <div className="p-0.5 sm:p-1 rounded-full bg-accent/20 flex-shrink-0">
-                    <Check className="w-3 h-3 sm:w-4 sm:h-4 text-accent" />
+                  <div className="p-0.5 sm:p-1 rounded-full bg-secondary flex-shrink-0">
+                    <Check className="w-3 h-3 sm:w-4 sm:h-4 text-foreground" />
                   </div>
                   <span className="text-xs sm:text-sm">{feature}</span>
                 </div>

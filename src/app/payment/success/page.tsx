@@ -57,7 +57,7 @@ function PaymentSuccessContent() {
     return (
       <div className="min-h-screen flex items-center justify-center bg-background">
         <div className="text-center">
-          <Loader2 className="w-16 h-16 animate-spin text-primary mx-auto mb-4" />
+          <Loader2 className="w-16 h-16 animate-spin text-foreground mx-auto mb-4" />
           <h1 className="text-2xl font-bold mb-2">Processing your payment...</h1>
           <p className="text-muted-foreground">Please wait while we activate your subscription</p>
         </div>
@@ -85,7 +85,7 @@ function PaymentSuccessContent() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background p-4">
       <div className="text-center max-w-md">
-        <CheckCircle className="w-16 h-16 text-accent mx-auto mb-4" />
+        <CheckCircle className="w-16 h-16 text-foreground mx-auto mb-4" />
         <h1 className="text-3xl font-bold mb-2">🎉 Welcome to Pro!</h1>
         <p className="text-lg text-muted-foreground mb-6">
           Your subscription has been activated successfully. You now have access to all premium features!
@@ -105,7 +105,7 @@ function LoadingFallback() {
   return (
     <div className="min-h-screen flex items-center justify-center bg-background">
       <div className="text-center">
-        <Loader2 className="w-16 h-16 animate-spin text-primary mx-auto mb-4" />
+        <Loader2 className="w-16 h-16 animate-spin text-foreground mx-auto mb-4" />
         <h1 className="text-2xl font-bold mb-2">Loading...</h1>
       </div>
     </div>

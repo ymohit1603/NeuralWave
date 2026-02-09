@@ -462,10 +462,10 @@ export function AudioProcessor({
         />
       )}
 
-      <div className="p-4 sm:p-6 md:p-8 rounded-2xl glass-card border border-primary/20 overflow-hidden">
+      <div className="p-4 sm:p-6 md:p-8 rounded-2xl bg-card border border-border overflow-hidden">
         {/* Header */}
         <div className="flex items-center gap-3 sm:gap-4 mb-6 sm:mb-8">
-          <div className={`p-2 sm:p-3 rounded-xl bg-gradient-to-br from-primary to-accent flex-shrink-0 ${isProcessing ? 'animate-neural-pulse' : ''
+          <div className={`p-2 sm:p-3 rounded-xl bg-primary flex-shrink-0 ${isProcessing ? '' : ''
             }`}>
             <Brain className="w-5 h-5 sm:w-6 sm:h-6 text-white" />
           </div>
@@ -482,7 +482,7 @@ export function AudioProcessor({
                   variant="ghost"
                   size="icon"
                   onClick={() => setShowControls(!showControls)}
-                  className={showControls ? 'bg-primary/10' : ''}
+                  className={showControls ? 'bg-secondary' : ''}
                   title="Audio Controls"
                 >
                   <Settings2 className="w-4 h-4 sm:w-5 sm:h-5" />
@@ -501,8 +501,8 @@ export function AudioProcessor({
             <div
               key={i}
               className={`w-1 sm:w-1.5 rounded-full transition-all duration-150 ${isComplete
-                ? 'bg-gradient-to-t from-primary to-accent'
-                : 'bg-primary/50'
+                ? 'bg-foreground'
+                : 'bg-foreground/30'
                 }`}
               style={{
                 height: isComplete
@@ -518,7 +518,7 @@ export function AudioProcessor({
           {/* Scanning line animation */}
           {isProcessing && (
             <div
-              className="absolute top-0 bottom-0 w-1 bg-gradient-to-b from-transparent via-accent to-transparent opacity-60"
+              className="absolute top-0 bottom-0 w-1 bg-foreground/30 opacity-60"
               style={{
                 left: `${progress}%`,
                 transition: 'left 300ms linear',
@@ -539,7 +539,7 @@ export function AudioProcessor({
           </div>
           <div className="h-2 bg-secondary rounded-full overflow-hidden">
             <div
-              className={`h-full transition-all duration-300 rounded-full ${error ? 'bg-destructive' : 'bg-gradient-to-r from-primary via-neural-purple to-accent'
+              className={`h-full transition-all duration-300 rounded-full ${error ? 'bg-destructive' : 'bg-foreground'
                 }`}
               style={{ width: `${progress}%` }}
             />
@@ -599,7 +599,7 @@ export function AudioProcessor({
                       [&::-webkit-slider-thumb]:w-4
                       [&::-webkit-slider-thumb]:h-4
                       [&::-webkit-slider-thumb]:rounded-full
-                      [&::-webkit-slider-thumb]:bg-primary
+                      [[&::-webkit-slider-thumb]:bg-primary::-webkit-slider-thumb]:bg-foreground
                       [&::-webkit-slider-thumb]:cursor-pointer
                       [&::-webkit-slider-thumb]:shadow-lg
                       [&::-webkit-slider-thumb]:transition-transform
@@ -608,7 +608,7 @@ export function AudioProcessor({
                       [&::-moz-range-thumb]:w-4
                       [&::-moz-range-thumb]:h-4
                       [&::-moz-range-thumb]:rounded-full
-                      [&::-moz-range-thumb]:bg-primary
+                      [[&::-moz-range-thumb]:bg-primary::-moz-range-thumb]:bg-foreground
                       [&::-moz-range-thumb]:cursor-pointer
                       [&::-moz-range-thumb]:border-0
                       [&::-moz-range-thumb]:shadow-lg
@@ -616,7 +616,7 @@ export function AudioProcessor({
                       [&::-moz-range-thumb]:hover:scale-110
                       [&::-moz-range-thumb]:active:scale-125"
                     style={{
-                      background: `linear-gradient(to right, hsl(var(--primary)) 0%, hsl(var(--primary)) ${(currentTime / (duration || 1)) * 100}%, hsl(var(--secondary)) ${(currentTime / (duration || 1)) * 100}%, hsl(var(--secondary)) 100%)`
+                      background: `linear-gradient(to right, hsl(var(--foreground)) 0%, hsl(var(--foreground)) ${(currentTime / (duration || 1)) * 100}%, hsl(var(--secondary)) ${(currentTime / (duration || 1)) * 100}%, hsl(var(--secondary)) 100%)`
                     }}
                   />
                   <span className="text-xs sm:text-sm font-medium text-muted-foreground min-w-[35px] sm:min-w-[45px] text-right">
@@ -673,7 +673,7 @@ export function AudioProcessor({
             </div>
 
             {/* Benefit reminder */}
-            <p className="text-center text-xs sm:text-sm text-accent mt-3 sm:mt-4">
+            <p className="text-center text-xs sm:text-sm text-foreground mt-3 sm:mt-4">
               {user
                 ? 'Signed in: you can download your processed track.'
                 : 'Sign in to download your processed track.'

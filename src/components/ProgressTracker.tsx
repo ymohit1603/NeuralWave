@@ -28,24 +28,24 @@ export function ProgressTracker() {
   const progress = (completedCount / milestones.length) * 100;
 
   return (
-    <div className="p-4 rounded-xl glass-card border border-primary/10">
+    <div className="p-4 rounded-xl bg-card border border-border">
       <div className="flex items-center justify-between mb-3">
-        <h3 className="text-sm font-semibold">Your Progress</h3>
+        <h3 className="text-sm font-medium">Your Progress</h3>
         <span className="text-xs text-muted-foreground">
           {completedCount}/{milestones.length}
         </span>
       </div>
 
       {/* Progress bar */}
-      <div className="h-1.5 bg-secondary rounded-full overflow-hidden mb-4">
+      <div className="h-1 bg-secondary rounded-full overflow-hidden mb-4">
         <div
-          className="h-full bg-gradient-to-r from-primary to-accent transition-all duration-500"
+          className="h-full bg-foreground rounded-full transition-all duration-500"
           style={{ width: `${progress}%` }}
         />
       </div>
 
       {/* Milestones */}
-      <div className="space-y-2">
+      <div className="space-y-2.5">
         {milestones.map((milestone) => (
           <div
             key={milestone.id}
@@ -54,7 +54,7 @@ export function ProgressTracker() {
             <div
               className={`flex-shrink-0 w-5 h-5 rounded-full flex items-center justify-center transition-all ${
                 milestone.completed
-                  ? 'bg-accent text-accent-foreground'
+                  ? 'bg-foreground text-background'
                   : 'bg-secondary text-muted-foreground'
               }`}
             >

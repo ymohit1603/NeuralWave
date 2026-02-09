@@ -106,7 +106,7 @@ export function SliderControl({
           '[&_[data-radix-slider-thumb]]:active:scale-95',
           // Track styling
           '[&_[data-radix-slider-track]]:h-2',
-          '[&_[data-radix-slider-range]]:bg-gradient-to-r [&_[data-radix-slider-range]]:from-primary [&_[data-radix-slider-range]]:to-accent'
+          '[&_[data-radix-slider-range]]:bg-foreground'
         )}
       />
     </div>

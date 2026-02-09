@@ -110,12 +110,12 @@ export default function TracksPage() {
 
       <main className="flex-1 overflow-auto">
         {/* Mobile Menu Bar - Only visible on mobile */}
-        <div className="lg:hidden sticky top-0 z-20 glass-card border-b border-primary/10 h-14">
+        <div className="lg:hidden sticky top-0 z-20 bg-white/80 backdrop-blur-xl border-b border-border h-14">
           {/* Hamburger menu button space - button is rendered by Sidebar component */}
         </div>
 
         {/* Header Content - Below menu bar on mobile, normal on desktop */}
-        <header className="glass-card border-b border-primary/10 lg:sticky lg:top-0 lg:z-10">
+        <header className="bg-white/80 backdrop-blur-xl border-b border-border lg:sticky lg:top-0 lg:z-10">
           <div className="px-4 sm:px-6 lg:px-8 py-4 sm:py-5">
             <div className="flex items-center justify-between gap-3">
               <div className="min-w-0 flex-1">
@@ -134,14 +134,14 @@ export default function TracksPage() {
         {/* Main content */}
         <div className="p-4 sm:p-6 lg:p-8 max-w-6xl mx-auto">
           {isLoading ? (
-            <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
-              <Loader2 className="w-8 h-8 text-primary animate-spin mb-4" />
+            <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border">
+              <Loader2 className="w-8 h-8 text-foreground animate-spin mb-4" />
               <p className="text-muted-foreground">Loading your music...</p>
             </div>
           ) : tracks.length === 0 ? (
-            <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl glass-card border border-primary/20">
-              <div className="p-3 sm:p-4 rounded-2xl bg-gradient-to-br from-primary/20 to-accent/20 mb-3 sm:mb-4">
-                <Music className="w-6 h-6 sm:w-8 sm:h-8 text-primary" />
+            <div className="flex flex-col items-center justify-center p-8 sm:p-12 rounded-2xl bg-card border border-border">
+              <div className="p-3 sm:p-4 rounded-2xl bg-secondary mb-3 sm:mb-4">
+                <Music className="w-6 h-6 sm:w-8 sm:h-8 text-foreground" />
               </div>
               <h3 className="text-lg sm:text-xl font-semibold mb-2">No tracks yet</h3>
               <p className="text-muted-foreground text-center mb-4 sm:mb-6 max-w-md text-sm sm:text-base px-4">
@@ -157,7 +157,7 @@ export default function TracksPage() {
               {tracks.map((track) => (
                 <div
                   key={track.id}
-                  className="flex items-center gap-3 sm:gap-4 p-4 sm:p-5 rounded-2xl glass-card border border-primary/20 hover:border-primary/40 transition-all group"
+                  className="flex items-center gap-3 sm:gap-4 p-4 sm:p-5 rounded-2xl bg-card border border-border hover:border-foreground/15 transition-all group"
                 >
                   {/* Track Thumbnail/Icon */}
                   <div className="relative w-14 h-14 sm:w-16 sm:h-16 rounded-xl overflow-hidden flex-shrink-0">
@@ -172,7 +172,7 @@ export default function TracksPage() {
                         }}
                       />
                     ) : null}
-                    <div className={`${track.thumbnail ? 'hidden' : ''} absolute inset-0 bg-gradient-to-br from-primary to-accent flex items-center justify-center`}>
+                    <div className={`${track.thumbnail ? 'hidden' : ''} absolute inset-0 bg-primary flex items-center justify-center`}>
                       <Sparkles className="w-5 h-5 sm:w-7 sm:h-7 text-white" />
                     </div>
                   </div>
