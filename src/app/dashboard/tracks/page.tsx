@@ -9,7 +9,7 @@ import { Badge } from "@/components/ui/badge";
 import { useSavedTracks } from "@/hooks/useSavedTracks";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/contexts/AuthContext";
-import { exportAsWAV } from "@/lib/audioProcessor";
+import { exportAsMP3 } from "@/lib/audioProcessor";
 
 // Helper function to format relative time
 function getRelativeTime(dateString: string): string {
@@ -75,7 +75,7 @@ export default function TracksPage() {
     try {
       const audioBuffer = await getTrackAudioBuffer(trackId);
       if (audioBuffer) {
-        exportAsWAV(audioBuffer, title);
+        exportAsMP3(audioBuffer, title);
         toast({
           title: "Download started",
           description: "Your neural-optimized audio is downloading.",

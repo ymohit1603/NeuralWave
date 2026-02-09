@@ -31,7 +31,7 @@ interface AudioUploaderProps {
 }
 
 const MAX_FILE_SIZE = 50 * 1024 * 1024; // 50MB
-const ACCEPTED_FORMATS = ['audio/mpeg', 'audio/mp3', 'audio/wav', 'audio/x-wav', 'audio/wave'];
+const ACCEPTED_FORMATS = ['audio/mpeg', 'audio/mp3'];
 
 export function AudioUploader({
   onFileSelect,
@@ -117,8 +117,8 @@ export function AudioUploader({
   }, [searchQuery]);
 
   const validateFile = (file: File): string | null => {
-    if (!ACCEPTED_FORMATS.includes(file.type) && !file.name.match(/\.(mp3|wav)$/i)) {
-      return "Unsupported file format. Please upload MP3 or WAV files only.";
+    if (!ACCEPTED_FORMATS.includes(file.type) && !file.name.match(/\.mp3$/i)) {
+      return "Unsupported file format. Please upload MP3 files only.";
     }
     if (file.size > MAX_FILE_SIZE) {
       return `File size exceeds 50MB limit. Your file is ${(file.size / 1024 / 1024).toFixed(2)}MB.`;
@@ -298,7 +298,7 @@ export function AudioUploader({
             >
               <input
                 type="file"
-                accept="audio/*"
+                accept="audio/mpeg,audio/mp3,.mp3"
                 onChange={handleFileInput}
                 className="absolute inset-0 w-full h-full opacity-0 cursor-pointer"
               />
@@ -313,7 +313,7 @@ export function AudioUploader({
                 {isDragging ? "Drop your file here" : "Drag & drop your audio file"}
               </p>
               <p className="text-sm text-muted-foreground mb-4">
-                or click to browse • MP3, WAV, M4A supported
+                or click to browse • MP3 only
               </p>
 
               <Button variant="outline" className="pointer-events-none">

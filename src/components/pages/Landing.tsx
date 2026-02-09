@@ -27,9 +27,6 @@ export default function Landing() {
   // Prefetch dashboard routes for faster navigation
   useEffect(() => {
     router.prefetch('/dashboard');
-    router.prefetch('/dashboard/tracks');
-    router.prefetch('/dashboard/upgrade');
-    router.prefetch('/dashboard/settings');
   }, [router]);
 
   // Track home page view

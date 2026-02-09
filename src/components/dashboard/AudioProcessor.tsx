@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2 } from "lucide-react";
-import { processAudio, exportAsWAV, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
+import { processAudio, exportAsMP3, exportAsWAV, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { renderAudioWithSettings } from "@/lib/audio/exportWithSettings";
 import { useToast } from "@/hooks/use-toast";
 import { AuthModal } from "@/components/AuthModal";
@@ -364,7 +364,10 @@ export function AudioProcessor({
     animationFrameRef.current = requestAnimationFrame(updatePlaybackTime);
   };
 
-  const handleDownload = async () => {
+  const handleDownload = async (format: 'mp3' | 'wav' = 'mp3') => {
+    console.log(`[Download] Starting download process (${format.toUpperCase()})...`);
+    console.log('[Download] Current settings:', audioEngine.settings);
+    
     if (!user) {
       setShowAuthModal(true);
       toast({
@@ -376,6 +379,7 @@ export function AudioProcessor({
 
     const sourceForExport = processedBuffer || audioBuffer;
     if (!sourceForExport) {
+      console.error('[Download] No audio buffer available');
       toast({
         title: "Download unavailable",
         description: "Audio is not ready yet.",
@@ -384,20 +388,53 @@ export function AudioProcessor({
       return;
     }
 
+    console.log('[Download] Source buffer:', {
+      duration: sourceForExport.duration,
+      sampleRate: sourceForExport.sampleRate,
+      channels: sourceForExport.numberOfChannels,
+      length: sourceForExport.length
+    });
+
     setIsExporting(true);
+    const startTime = performance.now();
+    
     try {
+      console.log('[Download] Rendering audio with settings...');
+      console.log('[Download] Settings being applied:', JSON.stringify(audioEngine.settings, null, 2));
+      
       const rendered = await renderAudioWithSettings(sourceForExport, audioEngine.settings);
-      exportAsWAV(rendered, fileName);
+      
+      const renderTime = performance.now() - startTime;
+      console.log(`[Download] Rendering completed in ${renderTime.toFixed(0)}ms`);
+      console.log('[Download] Rendered buffer:', {
+        duration: rendered.duration,
+        sampleRate: rendered.sampleRate,
+        channels: rendered.numberOfChannels,
+        length: rendered.length
+      });
+      
+      console.log(`[Download] Starting ${format.toUpperCase()} export...`);
+      
+      if (format === 'wav') {
+        exportAsWAV(rendered, fileName);
+      } else {
+        exportAsMP3(rendered, fileName);
+      }
+      
+      const totalTime = performance.now() - startTime;
+      console.log(`[Download] Total download process completed in ${totalTime.toFixed(0)}ms`);
+      
       toast({
         title: "Download started",
-        description: "Your audio with current settings is downloading.",
+        description: `Your ${format.toUpperCase()} file with current settings is downloading.`,
       });
 
       if (hasSavedTrack && onSaveTrack) {
         await onSaveTrack(audioEngine.settings, sourceForExport);
       }
     } catch (error) {
-      console.error("Download render failed:", error);
+      console.error("[Download] Download render failed:", error);
+      console.error("[Download] Error stack:", error instanceof Error ? error.stack : 'No stack trace');
       toast({
         title: "Download failed",
         description: "Could not render audio with current settings. Please try again.",
@@ -645,21 +682,49 @@ export function AudioProcessor({
                     </>
                   )}
                 </Button>
-                <Button
-                  variant="outline"
-                  size="lg"
-                  onClick={() => void handleDownload()}
-                  className="gap-2 w-full sm:w-auto"
-                  disabled={isExporting}
-                >
-                  {!user && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
-                  {isExporting ? (
-                    <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
-                  ) : (
-                    <Download className="w-4 h-4 sm:w-5 sm:h-5" />
-                  )}
-                  {isExporting ? "Preparing..." : "Download"}
-                </Button>
+                <div className="flex gap-2 w-full sm:w-auto">
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    onClick={() => void handleDownload('mp3')}
+                    className="gap-2 flex-1 sm:flex-initial"
+                    disabled={isExporting}
+                  >
+                    {!user && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
+                    {isExporting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                        <span className="hidden sm:inline">Preparing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4 sm:w-5 sm:h-5" />
+                        MP3
+                      </>
+                    )}
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="lg"
+                    onClick={() => void handleDownload('wav')}
+                    className="gap-2 flex-1 sm:flex-initial"
+                    disabled={isExporting}
+                    title="Download uncompressed WAV (larger file, better quality)"
+                  >
+                    {!user && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
+                    {isExporting ? (
+                      <>
+                        <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
+                        <span className="hidden sm:inline">Preparing...</span>
+                      </>
+                    ) : (
+                      <>
+                        <Download className="w-4 h-4 sm:w-5 sm:h-5" />
+                        WAV
+                      </>
+                    )}
+                  </Button>
+                </div>
                 <Button
                   variant="ghost"
                   size="lg"

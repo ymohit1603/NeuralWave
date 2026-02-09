@@ -14,10 +14,10 @@ export const MODE_PRESETS: Record<EffectMode, UserAudioSettings> = {
     bassWarmth: 40,
     clarity: 50,
     airBrightness: 30,
-    // Spatial
-    travelSpeed: 35,           // ~0.08 Hz
-    effectIntensity: 70,
-    travelWidth: 80,
+    // Spatial - MAX VALUES AS REQUESTED
+    travelSpeed: 100,          // MAX: ~0.2 Hz
+    effectIntensity: 100,      // MAX: Full intensity
+    travelWidth: 100,          // MAX: Full width
     spatialDepth: 40,
     movementPattern: 'leftright',
     // Bilateral (not used in this mode but included for completeness)

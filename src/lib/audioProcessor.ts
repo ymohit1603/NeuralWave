@@ -32,6 +32,7 @@
  */
 
 import { guess } from 'web-audio-beat-detector';
+import lamejs from '@breezystack/lamejs';
 import toWav from 'audiobuffer-to-wav';
 
 export interface UserProfile {
@@ -308,22 +309,42 @@ async function applyBeatSyncedPanning(
 }
 
 /**
- * Export audio buffer as high-quality WAV file
- * Uses 32-bit float for maximum dynamic range and quality preservation
+ * Export audio buffer as WAV file (uncompressed, high quality)
+ * Uses 16-bit PCM for testing - no lossy compression
  */
 export function exportAsWAV(audioBuffer: AudioBuffer, fileName: string): void {
+  console.log('[ExportWAV] Starting WAV export...');
+  console.log('[ExportWAV] Input buffer:', {
+    duration: audioBuffer.duration,
+    sampleRate: audioBuffer.sampleRate,
+    channels: audioBuffer.numberOfChannels,
+    length: audioBuffer.length
+  });
+  
   try {
+    const startTime = performance.now();
+    
     // Convert AudioBuffer to WAV using audiobuffer-to-wav
-    // Use float32 for maximum quality (preserves full dynamic range)
-    const wavBuffer = toWav(audioBuffer, { float32: true });
+    console.log('[ExportWAV] Converting to WAV format...');
+    const wavBuffer = toWav(audioBuffer);
+    
+    const conversionTime = performance.now() - startTime;
+    console.log(`[ExportWAV] WAV conversion completed in ${conversionTime.toFixed(0)}ms`);
+    
+    // Calculate file size
+    const fileSizeMB = (wavBuffer.byteLength / 1024 / 1024).toFixed(2);
+    console.log(`[ExportWAV] WAV file size: ${fileSizeMB} MB`);
     
     // Create blob and download
     const blob = new Blob([wavBuffer], { type: 'audio/wav' });
     const url = URL.createObjectURL(blob);
     
+    const outputFileName = fileName.replace(/\.[^/.]+$/, '') + '_bilateral_8d.wav';
+    console.log(`[ExportWAV] Triggering download: ${outputFileName}`);
+    
     const a = document.createElement('a');
     a.href = url;
-    a.download = fileName.replace(/\.[^/.]+$/, '') + '_bilateral_8d.wav';
+    a.download = outputFileName;
     a.style.display = 'none';
     
     document.body.appendChild(a);
@@ -333,10 +354,125 @@ export function exportAsWAV(audioBuffer: AudioBuffer, fileName: string): void {
     setTimeout(() => {
       document.body.removeChild(a);
       URL.revokeObjectURL(url);
+      console.log('[ExportWAV] Cleanup completed');
     }, 100);
     
+    const totalTime = performance.now() - startTime;
+    console.log(`[ExportWAV] Total export time: ${totalTime.toFixed(0)}ms`);
+    
   } catch (error) {
-    console.error('Export failed:', error);
+    console.error('[ExportWAV] Export failed:', error);
+    console.error('[ExportWAV] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
+    throw new Error('Failed to export audio file');
+  }
+}
+
+/**
+ * Export audio buffer as MP3 file
+ * Uses 128kbps bitrate for good quality and reasonable file size
+ */
+export function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): void {
+  console.log('[ExportMP3] Starting MP3 export...');
+  console.log('[ExportMP3] Input buffer:', {
+    duration: audioBuffer.duration,
+    sampleRate: audioBuffer.sampleRate,
+    channels: audioBuffer.numberOfChannels,
+    length: audioBuffer.length
+  });
+  
+  try {
+    const startTime = performance.now();
+    
+    // Convert AudioBuffer to MP3 using lamejs
+    console.log('[ExportMP3] Creating MP3 encoder...');
+    const mp3encoder = new lamejs.Mp3Encoder(audioBuffer.numberOfChannels, audioBuffer.sampleRate, 128);
+    const mp3Data: Uint8Array[] = [];
+    
+    const sampleBlockSize = 1152; // Standard MP3 frame size
+    
+    // Get channel data
+    console.log('[ExportMP3] Getting channel data...');
+    const leftChannel = audioBuffer.getChannelData(0);
+    const rightChannel = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
+    
+    // Convert float samples to 16-bit PCM
+    console.log('[ExportMP3] Converting to 16-bit PCM...');
+    const left = new Int16Array(leftChannel.length);
+    const right = new Int16Array(rightChannel.length);
+    
+    for (let i = 0; i < leftChannel.length; i++) {
+      left[i] = Math.max(-32768, Math.min(32767, leftChannel[i] * 32768));
+      right[i] = Math.max(-32768, Math.min(32767, rightChannel[i] * 32768));
+    }
+    
+    const conversionTime = performance.now() - startTime;
+    console.log(`[ExportMP3] PCM conversion completed in ${conversionTime.toFixed(0)}ms`);
+    
+    // Encode in chunks
+    console.log('[ExportMP3] Encoding to MP3...');
+    const totalChunks = Math.ceil(left.length / sampleBlockSize);
+    let encodedChunks = 0;
+    
+    for (let i = 0; i < left.length; i += sampleBlockSize) {
+      const leftChunk = left.subarray(i, i + sampleBlockSize);
+      const rightChunk = right.subarray(i, i + sampleBlockSize);
+      const mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
+      if (mp3buf.length > 0) {
+        mp3Data.push(mp3buf);
+      }
+      encodedChunks++;
+      
+      // Log progress every 10%
+      if (encodedChunks % Math.ceil(totalChunks / 10) === 0) {
+        const progress = (encodedChunks / totalChunks * 100).toFixed(0);
+        console.log(`[ExportMP3] Encoding progress: ${progress}%`);
+      }
+    }
+    
+    // Flush remaining data
+    console.log('[ExportMP3] Flushing encoder...');
+    const mp3buf = mp3encoder.flush();
+    if (mp3buf.length > 0) {
+      mp3Data.push(mp3buf);
+    }
+    
+    const encodingTime = performance.now() - startTime;
+    console.log(`[ExportMP3] MP3 encoding completed in ${encodingTime.toFixed(0)}ms`);
+    
+    // Calculate file size
+    const totalBytes = mp3Data.reduce((sum, chunk) => sum + chunk.length, 0);
+    const fileSizeMB = (totalBytes / 1024 / 1024).toFixed(2);
+    console.log(`[ExportMP3] MP3 file size: ${fileSizeMB} MB`);
+    
+    // Create blob from MP3 data
+    console.log('[ExportMP3] Creating blob...');
+    const blob = new Blob(mp3Data as BlobPart[], { type: 'audio/mp3' });
+    const url = URL.createObjectURL(blob);
+    
+    const outputFileName = fileName.replace(/\.[^/.]+$/, '') + '_bilateral_8d.mp3';
+    console.log(`[ExportMP3] Triggering download: ${outputFileName}`);
+    
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = outputFileName;
+    a.style.display = 'none';
+    
+    document.body.appendChild(a);
+    a.click();
+    
+    // Cleanup
+    setTimeout(() => {
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      console.log('[ExportMP3] Cleanup completed');
+    }, 100);
+    
+    const totalTime = performance.now() - startTime;
+    console.log(`[ExportMP3] Total export time: ${totalTime.toFixed(0)}ms`);
+    
+  } catch (error) {
+    console.error('[ExportMP3] Export failed:', error);
+    console.error('[ExportMP3] Error stack:', error instanceof Error ? error.stack : 'No stack trace');
     throw new Error('Failed to export audio file');
   }
 }
