@@ -370,7 +370,7 @@ export default function Dashboard() {
     handleUrlSubmit(youtubeUrl, 'search');
   };
 
-  const handleProcessingComplete = async (processedBuffer: AudioBuffer) => {
+  const handleProcessingComplete = async (sourceBuffer: AudioBuffer) => {
     setProcessingState("complete");
     const isFirstConversion = preferences.conversions === 0;
 
@@ -387,7 +387,8 @@ export default function Dashboard() {
     trackEvent.conversionCompleted(preferences.conversions + 1);
 
     // Save the processed track automatically (only if not already saved)
-    if (processedBuffer && currentFile && !currentTrackId && !hasSavedTrack) {
+    const bufferToSave = audioBuffer || sourceBuffer;
+    if (bufferToSave && currentFile && !currentTrackId && !hasSavedTrack) {
       try {
         // Check if this exact track was just saved (within last 10 seconds)
         const recentTracks = getRecentTracks(5);
@@ -408,7 +409,7 @@ export default function Dashboard() {
 
         const result = await addTrack(
           trackTitle,
-          processedBuffer, // Save the PROCESSED buffer, not the original
+          bufferToSave,
           getInitialSettings(),
           {
             author: youtubeVideoInfo?.author,
@@ -443,8 +444,8 @@ export default function Dashboard() {
   };
 
   // Save track when settings change (called from AudioProcessor)
-  const handleSaveTrack = async (settings: UserAudioSettings, processedBuffer: AudioBuffer) => {
-    if (!processedBuffer || !currentFile) return;
+  const handleSaveTrack = async (settings: UserAudioSettings, sourceBuffer: AudioBuffer) => {
+    if (!sourceBuffer || !currentFile) return;
 
     try {
       // If this is an existing track, update its settings
@@ -457,7 +458,7 @@ export default function Dashboard() {
       // But keep it as a fallback
       const result = await addTrack(
         youtubeVideoInfo?.title || currentFile,
-        processedBuffer,
+        sourceBuffer,
         settings,
         {
           author: youtubeVideoInfo?.author,

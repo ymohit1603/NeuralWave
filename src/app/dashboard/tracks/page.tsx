@@ -75,7 +75,7 @@ export default function TracksPage() {
     try {
       const audioBuffer = await getTrackAudioBuffer(trackId);
       if (audioBuffer) {
-        exportAsMP3(audioBuffer, title);
+        await exportAsMP3(audioBuffer, title);
         toast({
           title: "Download started",
           description: "Your neural-optimized audio is downloading.",

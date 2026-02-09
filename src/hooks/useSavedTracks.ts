@@ -5,6 +5,7 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { UserAudioSettings } from '@/lib/audio';
+import lamejs from '@breezystack/lamejs';
 import {
   getAllTracks,
   saveTrack as saveTrackToDB,
@@ -26,31 +27,102 @@ function generateId(): string {
   return `track_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
 }
 
-// Helper to convert AudioBuffer to base64
+const MP3_STORAGE_BITRATE = 128;
+const MP3_FRAME_SIZE = 1152;
+
+function yieldToMainThread(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
+function floatToInt16Sample(sample: number): number {
+  const clamped = Math.max(-1, Math.min(1, sample));
+  return clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7fff);
+}
+
+async function encodeAudioBufferToMp3(buffer: AudioBuffer): Promise<Uint8Array> {
+  // Yield immediately so UI can transition out of processing state first.
+  await yieldToMainThread();
+
+  const channelCount = Math.min(2, Math.max(1, buffer.numberOfChannels));
+  const leftChannel = buffer.getChannelData(0);
+  const rightChannel = channelCount > 1 ? buffer.getChannelData(1) : leftChannel;
+
+  const encoder = new lamejs.Mp3Encoder(channelCount, buffer.sampleRate, MP3_STORAGE_BITRATE);
+  const chunks: Uint8Array[] = [];
+  let totalLength = 0;
+
+  for (let i = 0; i < buffer.length; i += MP3_FRAME_SIZE) {
+    const frameLength = Math.min(MP3_FRAME_SIZE, buffer.length - i);
+    const leftFrame = new Int16Array(frameLength);
+
+    for (let j = 0; j < frameLength; j++) {
+      leftFrame[j] = floatToInt16Sample(leftChannel[i + j]);
+    }
+
+    let encodedFrame: Uint8Array;
+    if (channelCount > 1) {
+      const rightFrame = new Int16Array(frameLength);
+      for (let j = 0; j < frameLength; j++) {
+        rightFrame[j] = floatToInt16Sample(rightChannel[i + j]);
+      }
+      encodedFrame = encoder.encodeBuffer(leftFrame, rightFrame);
+    } else {
+      encodedFrame = encoder.encodeBuffer(leftFrame);
+    }
+
+    if (encodedFrame.length > 0) {
+      const chunk = new Uint8Array(encodedFrame);
+      chunks.push(chunk);
+      totalLength += chunk.length;
+    }
+
+    if ((i / MP3_FRAME_SIZE) % 20 === 0) {
+      await yieldToMainThread();
+    }
+  }
+
+  const flushed = encoder.flush();
+  if (flushed.length > 0) {
+    const flushChunk = new Uint8Array(flushed);
+    chunks.push(flushChunk);
+    totalLength += flushChunk.length;
+  }
+
+  const output = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const chunk of chunks) {
+    output.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return output;
+}
+
+function bytesToBase64(bytes: Uint8Array): Promise<string> {
+  return new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    const arrayBuffer = new ArrayBuffer(bytes.byteLength);
+    new Uint8Array(arrayBuffer).set(bytes);
+
+    reader.onload = () => {
+      const result = reader.result;
+      if (typeof result !== 'string') {
+        reject(new Error('Failed to convert audio bytes to base64'));
+        return;
+      }
+
+      const commaIndex = result.indexOf(',');
+      resolve(commaIndex >= 0 ? result.slice(commaIndex + 1) : result);
+    };
+    reader.onerror = () => reject(new Error('Failed to convert audio bytes to base64'));
+    reader.readAsDataURL(new Blob([arrayBuffer], { type: 'audio/mpeg' }));
+  });
+}
+
+// Helper to convert AudioBuffer to base64 MP3 for compact storage
 export async function audioBufferToBase64(buffer: AudioBuffer): Promise<string> {
-  // Create offline context to render the buffer
-  const offlineCtx = new OfflineAudioContext(
-    buffer.numberOfChannels,
-    buffer.length,
-    buffer.sampleRate
-  );
-
-  const source = offlineCtx.createBufferSource();
-  source.buffer = buffer;
-  source.connect(offlineCtx.destination);
-  source.start();
-
-  const renderedBuffer = await offlineCtx.startRendering();
-
-  // Convert to WAV format
-  const wavData = audioBufferToWav(renderedBuffer);
-
-  // Convert to base64
-  const base64 = btoa(
-    new Uint8Array(wavData).reduce((data, byte) => data + String.fromCharCode(byte), '')
-  );
-
-  return base64;
+  const mp3Bytes = await encodeAudioBufferToMp3(buffer);
+  return bytesToBase64(mp3Bytes);
 }
 
 // Helper to convert base64 back to AudioBuffer
@@ -66,62 +138,6 @@ export async function base64ToAudioBuffer(base64: string): Promise<AudioBuffer> 
   audioContext.close();
 
   return audioBuffer;
-}
-
-// Convert AudioBuffer to WAV format
-function audioBufferToWav(buffer: AudioBuffer): ArrayBuffer {
-  const numChannels = buffer.numberOfChannels;
-  const sampleRate = buffer.sampleRate;
-  const format = 1; // PCM
-  const bitDepth = 16;
-
-  const bytesPerSample = bitDepth / 8;
-  const blockAlign = numChannels * bytesPerSample;
-
-  const dataLength = buffer.length * blockAlign;
-  const bufferLength = 44 + dataLength;
-
-  const arrayBuffer = new ArrayBuffer(bufferLength);
-  const view = new DataView(arrayBuffer);
-
-  // WAV header
-  writeString(view, 0, 'RIFF');
-  view.setUint32(4, 36 + dataLength, true);
-  writeString(view, 8, 'WAVE');
-  writeString(view, 12, 'fmt ');
-  view.setUint32(16, 16, true);
-  view.setUint16(20, format, true);
-  view.setUint16(22, numChannels, true);
-  view.setUint32(24, sampleRate, true);
-  view.setUint32(28, sampleRate * blockAlign, true);
-  view.setUint16(32, blockAlign, true);
-  view.setUint16(34, bitDepth, true);
-  writeString(view, 36, 'data');
-  view.setUint32(40, dataLength, true);
-
-  // Write audio data
-  const channels: Float32Array[] = [];
-  for (let i = 0; i < numChannels; i++) {
-    channels.push(buffer.getChannelData(i));
-  }
-
-  let offset = 44;
-  for (let i = 0; i < buffer.length; i++) {
-    for (let channel = 0; channel < numChannels; channel++) {
-      const sample = Math.max(-1, Math.min(1, channels[channel][i]));
-      const intSample = sample < 0 ? sample * 0x8000 : sample * 0x7FFF;
-      view.setInt16(offset, intSample, true);
-      offset += 2;
-    }
-  }
-
-  return arrayBuffer;
-}
-
-function writeString(view: DataView, offset: number, string: string) {
-  for (let i = 0; i < string.length; i++) {
-    view.setUint8(offset + i, string.charCodeAt(i));
-  }
 }
 
 export function useSavedTracks() {

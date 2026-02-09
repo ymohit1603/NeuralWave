@@ -77,6 +77,15 @@ export interface ProcessingProgress {
 
 export type ProgressCallback = (progress: ProcessingProgress) => void;
 
+function floatToInt16Sample(sample: number): number {
+  const clamped = Math.max(-1, Math.min(1, sample));
+  return clamped < 0 ? Math.round(clamped * 0x8000) : Math.round(clamped * 0x7FFF);
+}
+
+function yieldToMainThread(): Promise<void> {
+  return new Promise(resolve => setTimeout(resolve, 0));
+}
+
 /**
  * Main audio processing function - Beat-synchronized 8D conversion
  */
@@ -369,9 +378,9 @@ export function exportAsWAV(audioBuffer: AudioBuffer, fileName: string): void {
 
 /**
  * Export audio buffer as MP3 file
- * Uses 128kbps bitrate for good quality and reasonable file size
+ * Uses 320kbps bitrate for better preservation of spatial cues
  */
-export function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): void {
+export async function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): Promise<void> {
   console.log('[ExportMP3] Starting MP3 export...');
   console.log('[ExportMP3] Input buffer:', {
     duration: audioBuffer.duration,
@@ -383,9 +392,9 @@ export function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): void {
   try {
     const startTime = performance.now();
     
-    // Convert AudioBuffer to MP3 using lamejs
+    // Convert AudioBuffer to MP3 using lamejs (high-bitrate to preserve spatial detail)
     console.log('[ExportMP3] Creating MP3 encoder...');
-    const mp3encoder = new lamejs.Mp3Encoder(audioBuffer.numberOfChannels, audioBuffer.sampleRate, 128);
+    const mp3encoder = new lamejs.Mp3Encoder(audioBuffer.numberOfChannels, audioBuffer.sampleRate, 320);
     const mp3Data: Uint8Array[] = [];
     
     const sampleBlockSize = 1152; // Standard MP3 frame size
@@ -395,27 +404,22 @@ export function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): void {
     const leftChannel = audioBuffer.getChannelData(0);
     const rightChannel = audioBuffer.numberOfChannels > 1 ? audioBuffer.getChannelData(1) : leftChannel;
     
-    // Convert float samples to 16-bit PCM
-    console.log('[ExportMP3] Converting to 16-bit PCM...');
-    const left = new Int16Array(leftChannel.length);
-    const right = new Int16Array(rightChannel.length);
-    
-    for (let i = 0; i < leftChannel.length; i++) {
-      left[i] = Math.max(-32768, Math.min(32767, leftChannel[i] * 32768));
-      right[i] = Math.max(-32768, Math.min(32767, rightChannel[i] * 32768));
-    }
-    
-    const conversionTime = performance.now() - startTime;
-    console.log(`[ExportMP3] PCM conversion completed in ${conversionTime.toFixed(0)}ms`);
-    
     // Encode in chunks
     console.log('[ExportMP3] Encoding to MP3...');
-    const totalChunks = Math.ceil(left.length / sampleBlockSize);
+    const totalChunks = Math.ceil(leftChannel.length / sampleBlockSize);
     let encodedChunks = 0;
+    const progressInterval = Math.max(1, Math.ceil(totalChunks / 10));
     
-    for (let i = 0; i < left.length; i += sampleBlockSize) {
-      const leftChunk = left.subarray(i, i + sampleBlockSize);
-      const rightChunk = right.subarray(i, i + sampleBlockSize);
+    for (let i = 0; i < leftChannel.length; i += sampleBlockSize) {
+      const frameLength = Math.min(sampleBlockSize, leftChannel.length - i);
+      const leftChunk = new Int16Array(frameLength);
+      const rightChunk = new Int16Array(frameLength);
+
+      for (let j = 0; j < frameLength; j++) {
+        leftChunk[j] = floatToInt16Sample(leftChannel[i + j]);
+        rightChunk[j] = floatToInt16Sample(rightChannel[i + j]);
+      }
+
       const mp3buf = mp3encoder.encodeBuffer(leftChunk, rightChunk);
       if (mp3buf.length > 0) {
         mp3Data.push(mp3buf);
@@ -423,9 +427,14 @@ export function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): void {
       encodedChunks++;
       
       // Log progress every 10%
-      if (encodedChunks % Math.ceil(totalChunks / 10) === 0) {
+      if (encodedChunks % progressInterval === 0 || encodedChunks === totalChunks) {
         const progress = (encodedChunks / totalChunks * 100).toFixed(0);
         console.log(`[ExportMP3] Encoding progress: ${progress}%`);
+      }
+
+      // Yield periodically so UI animations (spinner/progress) stay responsive.
+      if (encodedChunks % 20 === 0) {
+        await yieldToMainThread();
       }
     }
     
@@ -446,7 +455,7 @@ export function exportAsMP3(audioBuffer: AudioBuffer, fileName: string): void {
     
     // Create blob from MP3 data
     console.log('[ExportMP3] Creating blob...');
-    const blob = new Blob(mp3Data as BlobPart[], { type: 'audio/mp3' });
+    const blob = new Blob(mp3Data as BlobPart[], { type: 'audio/mpeg' });
     const url = URL.createObjectURL(blob);
     
     const outputFileName = fileName.replace(/\.[^/.]+$/, '') + '_bilateral_8d.mp3';

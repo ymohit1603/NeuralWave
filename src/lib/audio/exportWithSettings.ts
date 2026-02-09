@@ -4,6 +4,15 @@ import {
   PARAMETER_MAPPINGS,
 } from '@/lib/audio';
 
+const MAX_ITD_MS = 0.7;
+const MAX_ILD_LOW_DB = 4;
+const MAX_ILD_HIGH_DB = 14;
+const CROSSOVER_FREQ = 1500;
+const PINNA_NOTCH_FREQ = 9000;
+
+const REFLECTION_DELAYS_MS = [11, 17, 23, 31, 37, 43];
+const REFLECTION_GAINS = [0.8, 0.6, 0.5, 0.4, 0.3, 0.25];
+
 function applyEqChain(
   context: OfflineAudioContext,
   input: AudioNode,
@@ -11,13 +20,13 @@ function applyEqChain(
 ): AudioNode {
   const lowShelf = context.createBiquadFilter();
   lowShelf.type = 'lowshelf';
-  lowShelf.frequency.value = 120;
+  lowShelf.frequency.value = 250;
   lowShelf.gain.value = mapParameterValue(settings.bassWarmth, PARAMETER_MAPPINGS.bassWarmth);
 
   const presence = context.createBiquadFilter();
   presence.type = 'peaking';
   presence.frequency.value = 3000;
-  presence.Q.value = 0.8;
+  presence.Q.value = 1.0;
   presence.gain.value = mapParameterValue(settings.clarity, PARAMETER_MAPPINGS.clarity);
 
   const highShelf = context.createBiquadFilter();
@@ -31,37 +40,62 @@ function applyEqChain(
   return highShelf;
 }
 
-function addDepthMix(
+function applySpatialReverb(
   context: OfflineAudioContext,
   input: AudioNode,
   settings: UserAudioSettings
 ): AudioNode {
-  const depth = mapParameterValue(settings.spatialDepth, PARAMETER_MAPPINGS.spatialDepth);
-  if (depth <= 0.001) {
+  const wetAmount = settings.spatialDepth / 100;
+  if (wetAmount <= 0.0001) {
     return input;
   }
 
   const dryGain = context.createGain();
   const wetGain = context.createGain();
-  const delay = context.createDelay(0.45);
-  const feedback = context.createGain();
-  const mix = Math.min(0.45, depth * 0.5);
+  dryGain.gain.value = 1 - (wetAmount * 0.5);
+  wetGain.gain.value = wetAmount;
 
-  delay.delayTime.value = 0.08 + depth * 0.12;
-  feedback.gain.value = 0.15 + depth * 0.2;
-  dryGain.gain.value = 1 - mix;
-  wetGain.gain.value = mix;
+  const preDelay = context.createDelay(0.1);
+  preDelay.delayTime.value = 0.01;
+
+  const diffusionFilter = context.createBiquadFilter();
+  diffusionFilter.type = 'lowpass';
+  diffusionFilter.frequency.value = 8000;
+  diffusionFilter.Q.value = 0.5;
 
   input.connect(dryGain);
-  input.connect(delay);
-  delay.connect(feedback);
-  feedback.connect(delay);
-  delay.connect(wetGain);
+
+  input.connect(preDelay);
+  preDelay.connect(diffusionFilter);
+
+  for (let i = 0; i < REFLECTION_DELAYS_MS.length; i++) {
+    const delay = context.createDelay(0.1);
+    delay.delayTime.value = REFLECTION_DELAYS_MS[i] / 1000;
+
+    const gain = context.createGain();
+    gain.gain.value = REFLECTION_GAINS[i];
+
+    diffusionFilter.connect(delay);
+    delay.connect(gain);
+    gain.connect(wetGain);
+  }
 
   const output = context.createGain();
   dryGain.connect(output);
   wetGain.connect(output);
   return output;
+}
+
+function getPositionForPattern(settings: UserAudioSettings, phase: number): number {
+  switch (settings.movementPattern) {
+    case 'circular':
+      return Math.sin(phase);
+    case 'figure8':
+      return Math.sin(phase);
+    case 'leftright':
+    default:
+      return Math.sin(phase);
+  }
 }
 
 function applySpatialMode(
@@ -70,24 +104,16 @@ function applySpatialMode(
   settings: UserAudioSettings,
   duration: number
 ): AudioNode {
-  console.log('[RenderAudio] Building advanced spatial processor...');
-  
   const speedHz = mapParameterValue(settings.travelSpeed, PARAMETER_MAPPINGS.travelSpeed);
-  const width = mapParameterValue(settings.travelWidth, PARAMETER_MAPPINGS.travelWidth);
-  const intensity = mapParameterValue(settings.effectIntensity, PARAMETER_MAPPINGS.effectIntensity);
-  
-  console.log(`[RenderAudio] Spatial params: speed=${speedHz}Hz, width=${width}, intensity=${intensity}`);
-  
-  // Create channel splitter/merger for stereo processing
+  const width = settings.travelWidth / 100;
+  const effectAmount = settings.effectIntensity / 100;
+
   const splitter = context.createChannelSplitter(2);
   const merger = context.createChannelMerger(2);
-  
-  // ITD delay nodes (Interaural Time Difference)
+
   const leftDelay = context.createDelay(0.001);
   const rightDelay = context.createDelay(0.001);
-  
-  // Crossover filters for frequency-dependent ILD
-  const CROSSOVER_FREQ = 1500;
+
   const leftLowpass = context.createBiquadFilter();
   const leftHighpass = context.createBiquadFilter();
   const rightLowpass = context.createBiquadFilter();
@@ -104,17 +130,14 @@ function applySpatialMode(
     filter.frequency.value = CROSSOVER_FREQ;
     filter.Q.value = 0.707;
   });
-  
-  // ILD gain nodes (Interaural Level Difference)
+
   const leftLowGain = context.createGain();
   const leftHighGain = context.createGain();
   const rightLowGain = context.createGain();
   const rightHighGain = context.createGain();
   const leftGain = context.createGain();
   const rightGain = context.createGain();
-  
-  // HRTF pinna notch filters
-  const PINNA_NOTCH_FREQ = 9000;
+
   const leftPinnaNotch = context.createBiquadFilter();
   const rightPinnaNotch = context.createBiquadFilter();
   
@@ -123,11 +146,9 @@ function applySpatialMode(
     filter.frequency.value = PINNA_NOTCH_FREQ;
     filter.Q.value = 5;
   });
-  
-  // Build the audio graph
+
   input.connect(splitter);
-  
-  // Left channel
+
   splitter.connect(leftDelay, 0);
   leftDelay.connect(leftLowpass);
   leftDelay.connect(leftHighpass);
@@ -137,8 +158,7 @@ function applySpatialMode(
   leftHighGain.connect(leftGain);
   leftGain.connect(leftPinnaNotch);
   leftPinnaNotch.connect(merger, 0, 0);
-  
-  // Right channel
+
   splitter.connect(rightDelay, 1);
   rightDelay.connect(rightLowpass);
   rightDelay.connect(rightHighpass);
@@ -148,39 +168,16 @@ function applySpatialMode(
   rightHighGain.connect(rightGain);
   rightGain.connect(rightPinnaNotch);
   rightPinnaNotch.connect(merger, 0, 1);
-  
-  // Animate spatial position over time
-  const MAX_ITD_MS = 0.7;
-  const MAX_ILD_LOW_DB = 4;
-  const MAX_ILD_HIGH_DB = 14;
+
   const step = 1 / 60; // 60fps automation
-  
-  console.log('[RenderAudio] Applying spatial automation...');
-  
+
   for (let t = 0; t <= duration; t += step) {
     const phase = t * speedHz * Math.PI * 2;
-    let position: number;
-    
-    // Calculate position based on pattern
-    switch (settings.movementPattern) {
-      case 'circular':
-        position = Math.sin(phase);
-        break;
-      case 'figure8':
-        position = Math.sin(phase);
-        break;
-      case 'leftright':
-      default:
-        position = Math.sin(phase);
-        break;
-    }
-    
-    position = position * width * intensity;
-    
-    // Apply ITD (Interaural Time Difference)
-    const itdMs = Math.abs(position) * MAX_ITD_MS * intensity;
+    const position = getPositionForPattern(settings, phase) * width;
+
+    const itdMs = Math.abs(position) * MAX_ITD_MS * effectAmount;
     const itdSeconds = itdMs / 1000;
-    
+
     if (position > 0) {
       leftDelay.delayTime.setValueAtTime(itdSeconds, t);
       rightDelay.delayTime.setValueAtTime(0, t);
@@ -188,41 +185,33 @@ function applySpatialMode(
       leftDelay.delayTime.setValueAtTime(0, t);
       rightDelay.delayTime.setValueAtTime(itdSeconds, t);
     }
-    
-    // Apply ILD (Interaural Level Difference) - frequency dependent
-    const ildLowDb = Math.abs(position) * MAX_ILD_LOW_DB * intensity;
-    const ildHighDb = Math.abs(position) * MAX_ILD_HIGH_DB * intensity;
+
+    const ildLowDb = Math.abs(position) * MAX_ILD_LOW_DB * effectAmount;
+    const ildHighDb = Math.abs(position) * MAX_ILD_HIGH_DB * effectAmount;
     const ildLowGain = Math.pow(10, ildLowDb / 20);
     const ildHighGain = Math.pow(10, ildHighDb / 20);
-    
+
     if (position > 0) {
-      // Sound from right
       leftLowGain.gain.setValueAtTime(1 / ildLowGain, t);
       leftHighGain.gain.setValueAtTime(1 / ildHighGain, t);
       rightLowGain.gain.setValueAtTime(1, t);
       rightHighGain.gain.setValueAtTime(1, t);
-      
-      // Pinna notch
-      leftPinnaNotch.Q.setValueAtTime(8 * intensity + 1, t);
+      leftPinnaNotch.Q.setValueAtTime(8 * effectAmount + 1, t);
       rightPinnaNotch.Q.setValueAtTime(2, t);
     } else {
-      // Sound from left
       leftLowGain.gain.setValueAtTime(1, t);
       leftHighGain.gain.setValueAtTime(1, t);
       rightLowGain.gain.setValueAtTime(1 / ildLowGain, t);
       rightHighGain.gain.setValueAtTime(1 / ildHighGain, t);
-      
-      // Pinna notch
       leftPinnaNotch.Q.setValueAtTime(2, t);
-      rightPinnaNotch.Q.setValueAtTime(8 * intensity + 1, t);
+      rightPinnaNotch.Q.setValueAtTime(8 * effectAmount + 1, t);
     }
   }
-  
-  console.log('[RenderAudio] Spatial automation complete');
+
   return merger;
 }
 
-function applyBilateralMode(
+function applyBilateralSmoothMode(
   context: OfflineAudioContext,
   input: AudioNode,
   settings: UserAudioSettings,
@@ -230,34 +219,69 @@ function applyBilateralMode(
 ): AudioNode {
   const panner = context.createStereoPanner();
   const frequencyHz = mapParameterValue(settings.bilateralFrequency, PARAMETER_MAPPINGS.bilateralFrequency);
-  const width = mapParameterValue(settings.travelWidth, PARAMETER_MAPPINGS.travelWidth);
-  const step = 1 / (frequencyHz * 2);
+  const width = settings.travelWidth / 100;
 
-  if (settings.bilateralType === 'hard-cut') {
-    let t = 0;
-    let side: -1 | 1 = -1;
-    while (t <= duration) {
-      panner.pan.setValueAtTime(side * width, t);
-      side = side === -1 ? 1 : -1;
-      t += step;
+  const lfo = context.createOscillator();
+  lfo.type = 'sine';
+  lfo.frequency.value = frequencyHz;
+
+  const lfoGain = context.createGain();
+  lfoGain.gain.value = width;
+
+  lfo.connect(lfoGain);
+  lfoGain.connect(panner.pan);
+  input.connect(panner);
+  lfo.start(0);
+  lfo.stop(duration);
+
+  return panner;
+}
+
+function applyBilateralHardCutMode(
+  context: OfflineAudioContext,
+  input: AudioNode,
+  settings: UserAudioSettings,
+  duration: number
+): AudioNode {
+  const splitter = context.createChannelSplitter(2);
+  const merger = context.createChannelMerger(2);
+  const leftGain = context.createGain();
+  const rightGain = context.createGain();
+
+  input.connect(splitter);
+  splitter.connect(leftGain, 0);
+  splitter.connect(rightGain, 1);
+  leftGain.connect(merger, 0, 0);
+  rightGain.connect(merger, 0, 1);
+
+  const frequencyHz = mapParameterValue(settings.bilateralFrequency, PARAMETER_MAPPINGS.bilateralFrequency);
+  const width = settings.travelWidth / 100;
+  const halfPeriodSeconds = 1 / (frequencyHz * 2);
+  const transitionTime = 0.01;
+
+  const applySide = (time: number, side: 'left' | 'right', immediate: boolean) => {
+    const leftValue = side === 'left' ? 1 : 1 - width;
+    const rightValue = side === 'left' ? 1 - width : 1;
+
+    if (immediate) {
+      leftGain.gain.setValueAtTime(leftValue, time);
+      rightGain.gain.setValueAtTime(rightValue, time);
+      return;
     }
-  } else {
-    let t = 0;
-    let side: -1 | 1 = -1;
-    panner.pan.setValueAtTime(-width, 0);
-    while (t <= duration) {
-      const nextT = Math.min(duration, t + step);
-      const currentPan = side * width;
-      const nextPan = (side === -1 ? 1 : -1) * width;
-      panner.pan.setValueAtTime(currentPan, t);
-      panner.pan.linearRampToValueAtTime(nextPan, nextT);
-      side = side === -1 ? 1 : -1;
-      t = nextT;
-    }
+
+    leftGain.gain.setTargetAtTime(leftValue, time, transitionTime);
+    rightGain.gain.setTargetAtTime(rightValue, time, transitionTime);
+  };
+
+  let side: 'left' | 'right' = 'left';
+  applySide(0, side, true);
+
+  for (let t = halfPeriodSeconds; t <= duration; t += halfPeriodSeconds) {
+    side = side === 'left' ? 'right' : 'left';
+    applySide(t, side, false);
   }
 
-  input.connect(panner);
-  return panner;
+  return merger;
 }
 
 function applyHaasMode(
@@ -301,13 +325,6 @@ export async function renderAudioWithSettings(
   sourceBuffer: AudioBuffer,
   settings: UserAudioSettings
 ): Promise<AudioBuffer> {
-  console.log('[RenderAudio] Starting render with settings:', settings);
-  console.log('[RenderAudio] Source buffer:', {
-    duration: sourceBuffer.duration,
-    sampleRate: sourceBuffer.sampleRate,
-    channels: sourceBuffer.numberOfChannels
-  });
-  
   const channelCount = Math.max(2, sourceBuffer.numberOfChannels);
   const context = new OfflineAudioContext({
     numberOfChannels: channelCount,
@@ -315,55 +332,34 @@ export async function renderAudioWithSettings(
     sampleRate: sourceBuffer.sampleRate,
   });
 
-  console.log('[RenderAudio] Created OfflineAudioContext');
-
   const source = context.createBufferSource();
   source.buffer = sourceBuffer;
-
-  console.log('[RenderAudio] Applying EQ chain...');
   let currentNode: AudioNode = applyEqChain(context, source, settings);
 
-  console.log(`[RenderAudio] Applying mode: ${settings.mode}`);
   switch (settings.mode) {
     case 'bilateral':
     case 'emdr':
-      console.log('[RenderAudio] Applying bilateral mode');
-      currentNode = applyBilateralMode(context, currentNode, settings, sourceBuffer.duration);
+      currentNode = settings.bilateralType === 'hard-cut'
+        ? applyBilateralHardCutMode(context, currentNode, settings, sourceBuffer.duration)
+        : applyBilateralSmoothMode(context, currentNode, settings, sourceBuffer.duration);
       break;
     case 'haas':
-      console.log('[RenderAudio] Applying Haas mode');
       currentNode = applyHaasMode(context, currentNode, settings);
       break;
     case '8d-spatial':
     default:
-      console.log('[RenderAudio] Applying 8D spatial mode');
       currentNode = applySpatialMode(context, currentNode, settings, sourceBuffer.duration);
       break;
   }
 
-  console.log('[RenderAudio] Adding depth mix...');
-  currentNode = addDepthMix(context, currentNode, settings);
+  currentNode = applySpatialReverb(context, currentNode, settings);
 
   const master = context.createGain();
   master.gain.value = mapParameterValue(settings.masterVolume, PARAMETER_MAPPINGS.masterVolume);
-  console.log(`[RenderAudio] Master volume: ${master.gain.value}`);
-  
+
   currentNode.connect(master);
   master.connect(context.destination);
 
   source.start(0);
-  
-  console.log('[RenderAudio] Starting offline rendering...');
-  const startTime = performance.now();
-  const result = await context.startRendering();
-  const renderTime = performance.now() - startTime;
-  
-  console.log(`[RenderAudio] Rendering completed in ${renderTime.toFixed(0)}ms`);
-  console.log('[RenderAudio] Result buffer:', {
-    duration: result.duration,
-    sampleRate: result.sampleRate,
-    channels: result.numberOfChannels
-  });
-  
-  return result;
+  return context.startRendering();
 }

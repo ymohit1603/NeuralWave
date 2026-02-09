@@ -3,7 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2 } from "lucide-react";
-import { processAudio, exportAsMP3, exportAsWAV, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
+import { processAudio, exportAsMP3, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { renderAudioWithSettings } from "@/lib/audio/exportWithSettings";
 import { useToast } from "@/hooks/use-toast";
 import { AuthModal } from "@/components/AuthModal";
@@ -16,9 +16,9 @@ interface AudioProcessorProps {
   fileName: string;
   audioBuffer: AudioBuffer | null;
   userProfile: UserProfile;
-  onComplete: (processedBuffer: AudioBuffer) => void;
+  onComplete: (sourceBuffer: AudioBuffer) => void;
   onReset: () => void;
-  onSaveTrack?: (settings: UserAudioSettings, processedBuffer: AudioBuffer) => Promise<void>;
+  onSaveTrack?: (settings: UserAudioSettings, sourceBuffer: AudioBuffer) => Promise<void>;
   initialSettings?: UserAudioSettings | null;
   trackId?: string | null;
 }
@@ -364,8 +364,8 @@ export function AudioProcessor({
     animationFrameRef.current = requestAnimationFrame(updatePlaybackTime);
   };
 
-  const handleDownload = async (format: 'mp3' | 'wav' = 'mp3') => {
-    console.log(`[Download] Starting download process (${format.toUpperCase()})...`);
+  const handleDownload = async () => {
+    console.log('[Download] Starting download process (MP3)...');
     console.log('[Download] Current settings:', audioEngine.settings);
     
     if (!user) {
@@ -377,7 +377,7 @@ export function AudioProcessor({
       return;
     }
 
-    const sourceForExport = processedBuffer || audioBuffer;
+    const sourceForExport = audioBuffer || processedBuffer;
     if (!sourceForExport) {
       console.error('[Download] No audio buffer available');
       toast({
@@ -413,24 +413,22 @@ export function AudioProcessor({
         length: rendered.length
       });
       
-      console.log(`[Download] Starting ${format.toUpperCase()} export...`);
-      
-      if (format === 'wav') {
-        exportAsWAV(rendered, fileName);
-      } else {
-        exportAsMP3(rendered, fileName);
-      }
+      console.log('[Download] Starting MP3 export...');
+      await exportAsMP3(rendered, fileName);
       
       const totalTime = performance.now() - startTime;
       console.log(`[Download] Total download process completed in ${totalTime.toFixed(0)}ms`);
       
       toast({
         title: "Download started",
-        description: `Your ${format.toUpperCase()} file with current settings is downloading.`,
+        description: "Your MP3 file with current settings is downloading.",
       });
 
       if (hasSavedTrack && onSaveTrack) {
-        await onSaveTrack(audioEngine.settings, sourceForExport);
+        // Keep save/update in the background so the download UI does not stay stuck.
+        void onSaveTrack(audioEngine.settings, sourceForExport).catch((saveError) => {
+          console.error('[Download] Failed to persist track settings after download:', saveError);
+        });
       }
     } catch (error) {
       console.error("[Download] Download render failed:", error);
@@ -460,7 +458,7 @@ export function AudioProcessor({
     audioEngine.updateParameter(param, value);
 
     // Auto-save settings for existing saved tracks.
-    const bufferForSave = processedBuffer || audioBuffer;
+    const bufferForSave = audioBuffer || processedBuffer;
     if (hasSavedTrack && onSaveTrack && bufferForSave) {
       // Get updated settings after the parameter change
       const updatedSettings = { ...audioEngine.settings, [param]: value };
@@ -471,7 +469,7 @@ export function AudioProcessor({
   const handleModeChange = useCallback((mode: EffectMode) => {
     audioEngine.setMode(mode);
 
-    const bufferForSave = processedBuffer || audioBuffer;
+    const bufferForSave = audioBuffer || processedBuffer;
     if (hasSavedTrack && onSaveTrack && bufferForSave) {
       const updatedSettings = { ...audioEngine.settings, mode };
       onSaveTrack(updatedSettings, bufferForSave).catch(console.error);
@@ -686,7 +684,7 @@ export function AudioProcessor({
                   <Button
                     variant="outline"
                     size="lg"
-                    onClick={() => void handleDownload('mp3')}
+                    onClick={() => void handleDownload()}
                     className="gap-2 flex-1 sm:flex-initial"
                     disabled={isExporting}
                   >
@@ -700,27 +698,6 @@ export function AudioProcessor({
                       <>
                         <Download className="w-4 h-4 sm:w-5 sm:h-5" />
                         MP3
-                      </>
-                    )}
-                  </Button>
-                  <Button
-                    variant="outline"
-                    size="lg"
-                    onClick={() => void handleDownload('wav')}
-                    className="gap-2 flex-1 sm:flex-initial"
-                    disabled={isExporting}
-                    title="Download uncompressed WAV (larger file, better quality)"
-                  >
-                    {!user && <Lock className="w-3 h-3 sm:w-4 sm:h-4" />}
-                    {isExporting ? (
-                      <>
-                        <Loader2 className="w-4 h-4 sm:w-5 sm:h-5 animate-spin" />
-                        <span className="hidden sm:inline">Preparing...</span>
-                      </>
-                    ) : (
-                      <>
-                        <Download className="w-4 h-4 sm:w-5 sm:h-5" />
-                        WAV
                       </>
                     )}
                   </Button>
