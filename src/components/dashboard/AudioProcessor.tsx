@@ -3,7 +3,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Slider } from "@/components/ui/slider";
 import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2, Scissors } from "lucide-react";
 import { processAudio, exportAsMP3, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { renderAudioWithSettings } from "@/lib/audio/exportWithSettings";
@@ -56,6 +55,7 @@ export function AudioProcessor({
   const [downloadMode, setDownloadMode] = useState<'full' | 'trim'>('full');
   const [trimStart, setTrimStart] = useState(0);
   const [trimEnd, setTrimEnd] = useState(0);
+  const [isTrimPreviewActive, setIsTrimPreviewActive] = useState(false);
 
   const { user } = useAuth();
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -381,6 +381,10 @@ export function AudioProcessor({
   const sourceDuration = sourceForDownload?.duration || 0;
   const canTrim = sourceDuration > MIN_TRIM_DURATION_SECONDS;
   const minTrimDuration = Math.min(MIN_TRIM_DURATION_SECONDS, sourceDuration || MIN_TRIM_DURATION_SECONDS);
+  const trimStartPercent = sourceDuration > 0 ? (trimStart / sourceDuration) * 100 : 0;
+  const trimEndPercent = sourceDuration > 0 ? (trimEnd / sourceDuration) * 100 : 100;
+  const trimDuration = Math.max(0, trimEnd - trimStart);
+  const canPreviewTrim = canTrim && trimDuration >= minTrimDuration;
 
   const handleOpenDownloadOptions = () => {
     if (!user) {
@@ -405,25 +409,58 @@ export function AudioProcessor({
     setTrimStart(0);
     setTrimEnd(source.duration);
     setDownloadMode('full');
+    setIsTrimPreviewActive(false);
     setShowDownloadDialog(true);
   };
 
-  const handleTrimStartChange = (values: number[]) => {
-    if (!sourceDuration || values.length === 0) {
+  const stopPlayback = useCallback(() => {
+    if (useRealTimeEngine) {
+      audioEngine.pause();
+      return;
+    }
+    cleanup();
+  }, [useRealTimeEngine, audioEngine]);
+
+  const playFromTime = useCallback(async (startTime: number) => {
+    if (!sourceDuration) {
       return;
     }
 
-    const rawStart = Math.max(0, Math.min(sourceDuration, values[0]));
+    const safeStart = Math.max(0, Math.min(sourceDuration, startTime));
+
+    if (useRealTimeEngine) {
+      await audioEngine.initialize();
+      audioEngine.seek(safeStart);
+      audioEngine.play();
+      return;
+    }
+
+    setCurrentTime(safeStart);
+    setTimeout(() => {
+      if (!isPlaying) {
+        togglePlayback();
+      } else {
+        seekTo(safeStart);
+      }
+    }, 20);
+  }, [sourceDuration, useRealTimeEngine, audioEngine, isPlaying]);
+
+  const handleTrimStartChange = (value: number) => {
+    if (!sourceDuration) {
+      return;
+    }
+
+    const rawStart = Math.max(0, Math.min(sourceDuration, value));
     const maxStart = Math.max(0, trimEnd - minTrimDuration);
     setTrimStart(Math.min(rawStart, maxStart));
   };
 
-  const handleTrimEndChange = (values: number[]) => {
-    if (!sourceDuration || values.length === 0) {
+  const handleTrimEndChange = (value: number) => {
+    if (!sourceDuration) {
       return;
     }
 
-    const rawEnd = Math.max(0, Math.min(sourceDuration, values[0]));
+    const rawEnd = Math.max(0, Math.min(sourceDuration, value));
     const minEnd = Math.min(sourceDuration, trimStart + minTrimDuration);
     setTrimEnd(Math.max(rawEnd, minEnd));
   };
@@ -447,6 +484,59 @@ export function AudioProcessor({
     const safePlayhead = Math.max(0, Math.min(sourceDuration, currentTime));
     setTrimEnd(Math.max(safePlayhead, minEnd));
   };
+
+  const handleTrimPreviewToggle = async () => {
+    if (!canPreviewTrim) {
+      return;
+    }
+
+    if (isTrimPreviewActive && isPlaying) {
+      stopPlayback();
+      setIsTrimPreviewActive(false);
+      return;
+    }
+
+    try {
+      await playFromTime(trimStart);
+      setIsTrimPreviewActive(true);
+    } catch (previewError) {
+      console.error('[Trim Preview] Failed to start preview:', previewError);
+      toast({
+        title: "Preview unavailable",
+        description: "Could not start trim preview. Please try again.",
+        variant: "destructive",
+      });
+      setIsTrimPreviewActive(false);
+    }
+  };
+
+  useEffect(() => {
+    if (!isTrimPreviewActive || !showDownloadDialog || downloadMode !== 'trim' || !isPlaying) {
+      return;
+    }
+
+    if (currentTime >= trimEnd) {
+      stopPlayback();
+      setIsTrimPreviewActive(false);
+      seekTo(trimStart);
+    }
+  }, [
+    currentTime,
+    downloadMode,
+    isPlaying,
+    isTrimPreviewActive,
+    showDownloadDialog,
+    stopPlayback,
+    trimEnd,
+    trimStart,
+  ]);
+
+  useEffect(() => {
+    if (!showDownloadDialog && isTrimPreviewActive) {
+      stopPlayback();
+      setIsTrimPreviewActive(false);
+    }
+  }, [isTrimPreviewActive, showDownloadDialog, stopPlayback]);
 
   const handleDownload = async (trimRange?: TrimRangeSeconds) => {
     console.log('[Download] Starting download process (MP3)...');
@@ -485,6 +575,11 @@ export function AudioProcessor({
       channels: sourceForExport.numberOfChannels,
       length: sourceForExport.length
     });
+
+    if (isTrimPreviewActive && isPlaying) {
+      stopPlayback();
+      setIsTrimPreviewActive(false);
+    }
 
     setIsExporting(true);
     const startTime = performance.now();
@@ -842,7 +937,13 @@ export function AudioProcessor({
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
                 <button
                   type="button"
-                  onClick={() => setDownloadMode('full')}
+                  onClick={() => {
+                    if (isTrimPreviewActive && isPlaying) {
+                      stopPlayback();
+                      setIsTrimPreviewActive(false);
+                    }
+                    setDownloadMode('full');
+                  }}
                   className={`rounded-xl border p-3 text-left transition-colors ${
                     downloadMode === 'full'
                       ? 'border-foreground bg-secondary'
@@ -854,7 +955,12 @@ export function AudioProcessor({
                 </button>
                 <button
                   type="button"
-                  onClick={() => canTrim && setDownloadMode('trim')}
+                  onClick={() => {
+                    if (!canTrim) {
+                      return;
+                    }
+                    setDownloadMode('trim');
+                  }}
                   disabled={!canTrim}
                   className={`rounded-xl border p-3 text-left transition-colors ${
                     downloadMode === 'trim'
@@ -871,34 +977,148 @@ export function AudioProcessor({
               </div>
 
               {downloadMode === 'trim' && canTrim && (
-                <div className="space-y-4 rounded-xl border border-border p-4">
+                <div className="space-y-4 rounded-xl border border-border bg-secondary/20 p-4">
                   <div className="flex items-center justify-between text-xs sm:text-sm">
-                    <span className="text-muted-foreground">Start</span>
-                    <span className="font-medium">{formatTime(trimStart)}</span>
+                    <span className="text-muted-foreground">CapCut-style trim timeline</span>
+                    <span className="font-medium">Length: {formatTime(trimDuration)}</span>
                   </div>
-                  <Slider
-                    value={[trimStart]}
-                    min={0}
-                    max={sourceDuration}
-                    step={0.1}
-                    onValueChange={handleTrimStartChange}
-                    disabled={isExporting}
-                  />
 
-                  <div className="flex items-center justify-between text-xs sm:text-sm">
-                    <span className="text-muted-foreground">End</span>
-                    <span className="font-medium">{formatTime(trimEnd)}</span>
+                  <div className="relative pt-2 pb-4">
+                    <div className="h-10 rounded-lg border border-border bg-background/80 relative overflow-hidden">
+                      <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1.5 bg-secondary rounded-full mx-3" />
+                      <div
+                        className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-foreground rounded-full"
+                        style={{
+                          left: `calc(${trimStartPercent}% + 12px)`,
+                          width: `calc(${Math.max(0, trimEndPercent - trimStartPercent)}% - 0px)`,
+                        }}
+                      />
+
+                      <input
+                        type="range"
+                        min={0}
+                        max={sourceDuration}
+                        step={0.1}
+                        value={trimStart}
+                        onChange={(e) => handleTrimStartChange(parseFloat(e.target.value))}
+                        disabled={isExporting}
+                        className="pointer-events-none absolute inset-0 h-10 w-full appearance-none bg-transparent
+                          [&::-webkit-slider-thumb]:pointer-events-auto
+                          [&::-webkit-slider-thumb]:appearance-none
+                          [&::-webkit-slider-thumb]:h-5
+                          [&::-webkit-slider-thumb]:w-5
+                          [&::-webkit-slider-thumb]:rounded-full
+                          [&::-webkit-slider-thumb]:border-2
+                          [&::-webkit-slider-thumb]:border-foreground
+                          [&::-webkit-slider-thumb]:bg-background
+                          [&::-webkit-slider-thumb]:shadow
+                          [&::-moz-range-thumb]:pointer-events-auto
+                          [&::-moz-range-thumb]:h-5
+                          [&::-moz-range-thumb]:w-5
+                          [&::-moz-range-thumb]:rounded-full
+                          [&::-moz-range-thumb]:border-2
+                          [&::-moz-range-thumb]:border-foreground
+                          [&::-moz-range-thumb]:bg-background"
+                      />
+                      <input
+                        type="range"
+                        min={0}
+                        max={sourceDuration}
+                        step={0.1}
+                        value={trimEnd}
+                        onChange={(e) => handleTrimEndChange(parseFloat(e.target.value))}
+                        disabled={isExporting}
+                        className="pointer-events-none absolute inset-0 h-10 w-full appearance-none bg-transparent
+                          [&::-webkit-slider-thumb]:pointer-events-auto
+                          [&::-webkit-slider-thumb]:appearance-none
+                          [&::-webkit-slider-thumb]:h-5
+                          [&::-webkit-slider-thumb]:w-5
+                          [&::-webkit-slider-thumb]:rounded-full
+                          [&::-webkit-slider-thumb]:border-2
+                          [&::-webkit-slider-thumb]:border-foreground
+                          [&::-webkit-slider-thumb]:bg-background
+                          [&::-webkit-slider-thumb]:shadow
+                          [&::-moz-range-thumb]:pointer-events-auto
+                          [&::-moz-range-thumb]:h-5
+                          [&::-moz-range-thumb]:w-5
+                          [&::-moz-range-thumb]:rounded-full
+                          [&::-moz-range-thumb]:border-2
+                          [&::-moz-range-thumb]:border-foreground
+                          [&::-moz-range-thumb]:bg-background"
+                      />
+                    </div>
+
+                    <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
+                      <span>Start {formatTime(trimStart)}</span>
+                      <span>End {formatTime(trimEnd)}</span>
+                    </div>
                   </div>
-                  <Slider
-                    value={[trimEnd]}
-                    min={0}
-                    max={sourceDuration}
-                    step={0.1}
-                    onValueChange={handleTrimEndChange}
-                    disabled={isExporting}
-                  />
+
+                  <div className="space-y-2">
+                    <div className="flex items-center justify-between text-xs sm:text-sm">
+                      <span className="text-muted-foreground">Playhead</span>
+                      <span className="font-medium">{formatTime(currentTime)}</span>
+                    </div>
+                    <input
+                      type="range"
+                      min="0"
+                      max={sourceDuration || 1}
+                      step="0.1"
+                      value={Math.max(0, Math.min(currentTime, sourceDuration || 0))}
+                      onChange={(e) => {
+                        const newTime = parseFloat(e.target.value);
+                        setCurrentTime(newTime);
+                        seekTo(newTime);
+                      }}
+                      className="w-full h-2 bg-secondary rounded-full appearance-none cursor-pointer
+                        [&::-webkit-slider-thumb]:appearance-none
+                        [&::-webkit-slider-thumb]:w-4
+                        [&::-webkit-slider-thumb]:h-4
+                        [&::-webkit-slider-thumb]:rounded-full
+                        [&::-webkit-slider-thumb]:bg-foreground
+                        [&::-webkit-slider-thumb]:cursor-pointer
+                        [&::-moz-range-thumb]:w-4
+                        [&::-moz-range-thumb]:h-4
+                        [&::-moz-range-thumb]:rounded-full
+                        [&::-moz-range-thumb]:bg-foreground
+                        [&::-moz-range-thumb]:cursor-pointer
+                        [&::-moz-range-thumb]:border-0"
+                      style={{
+                        background: `linear-gradient(to right, hsl(var(--foreground)) 0%, hsl(var(--foreground)) ${(Math.max(0, Math.min(currentTime, sourceDuration || 0)) / (sourceDuration || 1)) * 100}%, hsl(var(--secondary)) ${(Math.max(0, Math.min(currentTime, sourceDuration || 0)) / (sourceDuration || 1)) * 100}%, hsl(var(--secondary)) 100%)`
+                      }}
+                    />
+                  </div>
 
                   <div className="flex flex-col sm:flex-row gap-2">
+                    <Button
+                      type="button"
+                      variant={isTrimPreviewActive && isPlaying ? "neural" : "outline"}
+                      size="sm"
+                      onClick={() => void handleTrimPreviewToggle()}
+                      disabled={isExporting || !canPreviewTrim}
+                      className="gap-2"
+                    >
+                      {isTrimPreviewActive && isPlaying ? (
+                        <>
+                          <Pause className="w-4 h-4" />
+                          Stop preview
+                        </>
+                      ) : (
+                        <>
+                          <Play className="w-4 h-4" />
+                          Play selected clip
+                        </>
+                      )}
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => seekTo(trimStart)}
+                      disabled={isExporting}
+                    >
+                      Jump to trim start
+                    </Button>
                     <Button
                       type="button"
                       variant="outline"
@@ -906,7 +1126,7 @@ export function AudioProcessor({
                       onClick={setTrimStartFromPlayhead}
                       disabled={isExporting}
                     >
-                      Set start to playhead
+                      Set start from playhead
                     </Button>
                     <Button
                       type="button"
@@ -915,13 +1135,9 @@ export function AudioProcessor({
                       onClick={setTrimEndFromPlayhead}
                       disabled={isExporting}
                     >
-                      Set end to playhead
+                      Set end from playhead
                     </Button>
                   </div>
-
-                  <p className="text-xs text-muted-foreground">
-                    Export length: {formatTime(Math.max(0, trimEnd - trimStart))}
-                  </p>
                 </div>
               )}
 
