@@ -14,6 +14,22 @@ export default function UpgradePage() {
   const { user, hasActiveSubscription, subscriptionPlan } = useAuth();
   const [showAuthModal, setShowAuthModal] = useState(false);
   const { toast } = useToast();
+  const weeklyPrice = 7.99;
+  const yearlyPrice = 39.99;
+  const yearlySavingsAmount = (weeklyPrice * 52) - yearlyPrice;
+  const yearlySavingsRounded = Math.round(yearlySavingsAmount);
+  const yearlySavingsLabel = `$${yearlySavingsAmount.toFixed(2)}`;
+  const sharedProFeatures = [
+    "Unlimited conversions (upload + search)",
+    "One-click song search and convert",
+    "Full-song MP3 downloads",
+    "Trim before download",
+    "Full-length audio playback",
+    "Advanced beat detection",
+    "Beat-synced panning",
+    "Spatial depth effects",
+    "Priority processing speed"
+  ];
 
   const handleUpgrade = async (planType: PlanType) => {
     if (!user) {
@@ -37,32 +53,19 @@ export default function UpgradePage() {
     {
       id: 'weekly' as PlanType,
       name: "Weekly Pro",
-      price: "$7.99",
+      price: `$${weeklyPrice.toFixed(2)}`,
       period: "per week",
-      features: [
-        "Unlimited 8D conversions",
-        "Full-length audio playback",
-        "High-quality WAV downloads",
-        "Advanced beat detection",
-        "Priority processing speed"
-      ],
+      features: sharedProFeatures,
       current: hasActiveSubscription && subscriptionPlan === 'weekly',
       canUpgrade: false // Can't upgrade from weekly to weekly
     },
     {
       id: 'yearly' as PlanType,
       name: "Yearly Pro",
-      price: "$39.99",
+      price: `$${yearlyPrice.toFixed(2)}`,
       period: "per year",
-      savings: "Save 90%",
-      features: [
-        "All Weekly Pro features",
-        "Save $375 per year",
-        "Beat-synced panning",
-        "Spatial depth effects",
-        "Bass boost (6dB)",
-        "Priority support"
-      ],
+      savings: `Save ${yearlySavingsLabel}/year vs weekly`,
+      features: sharedProFeatures,
       popular: true,
       current: hasActiveSubscription && subscriptionPlan === 'yearly',
       canUpgrade: subscriptionPlan === 'weekly' // Can upgrade from weekly to yearly
@@ -73,14 +76,7 @@ export default function UpgradePage() {
       price: "$199.99",
       period: "one-time payment",
       savings: "Best Value",
-      features: [
-        "All Pro features forever",
-        "Lifetime updates",
-        "VIP support",
-        "Commercial license",
-        "Early beta access",
-        "Priority feature requests"
-      ],
+      features: sharedProFeatures,
       current: hasActiveSubscription && subscriptionPlan === 'lifetime',
       canUpgrade: subscriptionPlan === 'weekly' || subscriptionPlan === 'yearly' // Can upgrade from any plan to lifetime
     }
@@ -101,7 +97,7 @@ export default function UpgradePage() {
               <div className="min-w-0 flex-1">
                 <h1 className="text-xl sm:text-2xl font-bold">Upgrade to Pro</h1>
                 <p className="text-xs sm:text-sm text-muted-foreground">
-                  Unlock unlimited neural-optimized audio
+                  Keep free upload conversions, unlock one-click search conversion
                 </p>
               </div>
             </div>
@@ -116,12 +112,12 @@ export default function UpgradePage() {
               <Crown className="w-8 h-8 sm:w-12 sm:h-12 text-white" />
             </div>
             <h2 className="text-2xl sm:text-3xl font-bold mb-2 sm:mb-3">
-              {hasActiveSubscription ? 'Upgrade Your Plan' : 'Supercharge Your Brain with Pro'}
+              {hasActiveSubscription ? 'Change Your Billing Plan' : 'Upload for Free, Search Instantly with Pro'}
             </h2>
             <p className="text-sm sm:text-lg text-muted-foreground max-w-2xl mx-auto px-4">
               {hasActiveSubscription 
-                ? `You're currently on the ${subscriptionPlan} plan. Upgrade to unlock even more features!`
-                : 'Get unlimited access to neural-optimized audio, advanced features, and priority support'
+                ? `You're currently on the ${subscriptionPlan} plan. All Pro plans have the same features, with different billing options.`
+                : 'Free plan includes unlimited upload conversions. Pro adds one-click search conversion plus full download controls.'
               }
             </p>
           </div>
@@ -174,13 +170,19 @@ export default function UpgradePage() {
                     <span className="text-3xl sm:text-4xl font-bold">{plan.price}</span>
                   </div>
                   <p className="text-xs sm:text-sm text-muted-foreground">{plan.period}</p>
+                 
                 </div>
 
                 <ul className="space-y-2 sm:space-y-3 mb-4 sm:mb-6">
-                  {plan.features.map((feature, featureIndex) => (
+                  {(plan.id === 'yearly'
+                    ? [`Save $${yearlySavingsRounded}/year`, ...plan.features]
+                    : plan.features
+                  ).map((feature, featureIndex) => (
                     <li key={featureIndex} className="flex items-start gap-2">
                       <Check className="w-4 h-4 sm:w-5 sm:h-5 text-foreground flex-shrink-0 mt-0.5" />
-                      <span className="text-xs sm:text-sm">{feature}</span>
+                      <span className={`text-xs sm:text-sm ${plan.id === 'yearly' && featureIndex === 0 ? 'font-semibold text-foreground' : ''}`}>
+                        {feature}
+                      </span>
                     </li>
                   ))}
                 </ul>
@@ -212,19 +214,19 @@ export default function UpgradePage() {
           {/* FAQ */}
           <div className="mt-8 sm:mt-12 p-4 sm:p-6 rounded-2xl bg-card border border-border">
             <h3 className="text-lg sm:text-xl font-semibold mb-3 sm:mb-4 text-center">
-              {hasActiveSubscription ? 'Upgrade Information' : 'Why Upgrade?'}
+              {hasActiveSubscription ? 'Plan Details' : 'Plan Details'}
             </h3>
             <div className="grid md:grid-cols-2 gap-4 sm:gap-6 text-xs sm:text-sm text-muted-foreground">
               {hasActiveSubscription ? (
                 <>
                   <div>
                     <p className="mb-2">
-                      <strong className="text-foreground">Upgrading Your Plan:</strong> When you upgrade, your new plan takes effect immediately and your current subscription will be updated.
+                      <strong className="text-foreground">Same Feature Set:</strong> Weekly, yearly, and lifetime plans include the same Pro features. Only billing and total cost differ.
                     </p>
                   </div>
                   <div>
                     <p>
-                      <strong className="text-foreground">Lifetime Access:</strong> Upgrade to lifetime for one-time payment and never worry about renewals again. Perfect for long-term users!
+                      <strong className="text-foreground">Choosing a Plan:</strong> Pick weekly for flexibility, yearly for maximum recurring savings, or lifetime for one-time ownership.
                     </p>
                   </div>
                 </>
@@ -232,12 +234,12 @@ export default function UpgradePage() {
                 <>
                   <div>
                     <p className="mb-2">
-                      <strong className="text-foreground">Free Plan:</strong> Perfect for trying out neural optimization with 20-second previews.
+                      <strong className="text-foreground">Free Plan:</strong> Convert unlimited songs by uploading audio from your own device.
                     </p>
                   </div>
                   <div>
                     <p>
-                      <strong className="text-foreground">Pro Plans:</strong> Unlock full-length audio, unlimited downloads, and advanced features for serious users.
+                      <strong className="text-foreground">Pro Plans:</strong> Unlock one-click search conversion and full download controls. All Pro tiers include the same features.
                     </p>
                   </div>
                 </>

@@ -2,9 +2,12 @@
 
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
-import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2 } from "lucide-react";
+import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Slider } from "@/components/ui/slider";
+import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2, Scissors } from "lucide-react";
 import { processAudio, exportAsMP3, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { renderAudioWithSettings } from "@/lib/audio/exportWithSettings";
+import { normalizeTrimRange, trimAudioBuffer, type TrimRangeSeconds } from "@/lib/audio/trimAudio";
 import { useToast } from "@/hooks/use-toast";
 import { AuthModal } from "@/components/AuthModal";
 import { useAuth } from "@/contexts/AuthContext";
@@ -22,6 +25,8 @@ interface AudioProcessorProps {
   initialSettings?: UserAudioSettings | null;
   trackId?: string | null;
 }
+
+const MIN_TRIM_DURATION_SECONDS = 2;
 
 export function AudioProcessor({
   fileName,
@@ -47,6 +52,10 @@ export function AudioProcessor({
   const [useRealTimeEngine] = useState(true);
   const [hasSavedTrack, setHasSavedTrack] = useState(!!trackId);
   const [isExporting, setIsExporting] = useState(false);
+  const [showDownloadDialog, setShowDownloadDialog] = useState(false);
+  const [downloadMode, setDownloadMode] = useState<'full' | 'trim'>('full');
+  const [trimStart, setTrimStart] = useState(0);
+  const [trimEnd, setTrimEnd] = useState(0);
 
   const { user } = useAuth();
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -364,7 +373,82 @@ export function AudioProcessor({
     animationFrameRef.current = requestAnimationFrame(updatePlaybackTime);
   };
 
-  const handleDownload = async () => {
+  const getSourceForExport = useCallback(() => {
+    return audioBuffer || processedBuffer;
+  }, [audioBuffer, processedBuffer]);
+
+  const sourceForDownload = getSourceForExport();
+  const sourceDuration = sourceForDownload?.duration || 0;
+  const canTrim = sourceDuration > MIN_TRIM_DURATION_SECONDS;
+  const minTrimDuration = Math.min(MIN_TRIM_DURATION_SECONDS, sourceDuration || MIN_TRIM_DURATION_SECONDS);
+
+  const handleOpenDownloadOptions = () => {
+    if (!user) {
+      setShowAuthModal(true);
+      toast({
+        title: "Sign in to download",
+        description: "Create a free account to download your audio.",
+      });
+      return;
+    }
+
+    const source = getSourceForExport();
+    if (!source) {
+      toast({
+        title: "Download unavailable",
+        description: "Audio is not ready yet.",
+        variant: "destructive",
+      });
+      return;
+    }
+
+    setTrimStart(0);
+    setTrimEnd(source.duration);
+    setDownloadMode('full');
+    setShowDownloadDialog(true);
+  };
+
+  const handleTrimStartChange = (values: number[]) => {
+    if (!sourceDuration || values.length === 0) {
+      return;
+    }
+
+    const rawStart = Math.max(0, Math.min(sourceDuration, values[0]));
+    const maxStart = Math.max(0, trimEnd - minTrimDuration);
+    setTrimStart(Math.min(rawStart, maxStart));
+  };
+
+  const handleTrimEndChange = (values: number[]) => {
+    if (!sourceDuration || values.length === 0) {
+      return;
+    }
+
+    const rawEnd = Math.max(0, Math.min(sourceDuration, values[0]));
+    const minEnd = Math.min(sourceDuration, trimStart + minTrimDuration);
+    setTrimEnd(Math.max(rawEnd, minEnd));
+  };
+
+  const setTrimStartFromPlayhead = () => {
+    if (!sourceDuration) {
+      return;
+    }
+
+    const maxStart = Math.max(0, trimEnd - minTrimDuration);
+    const safePlayhead = Math.max(0, Math.min(sourceDuration, currentTime));
+    setTrimStart(Math.min(safePlayhead, maxStart));
+  };
+
+  const setTrimEndFromPlayhead = () => {
+    if (!sourceDuration) {
+      return;
+    }
+
+    const minEnd = Math.min(sourceDuration, trimStart + minTrimDuration);
+    const safePlayhead = Math.max(0, Math.min(sourceDuration, currentTime));
+    setTrimEnd(Math.max(safePlayhead, minEnd));
+  };
+
+  const handleDownload = async (trimRange?: TrimRangeSeconds) => {
     console.log('[Download] Starting download process (MP3)...');
     console.log('[Download] Current settings:', audioEngine.settings);
     
@@ -377,8 +461,8 @@ export function AudioProcessor({
       return;
     }
 
-    const sourceForExport = audioBuffer || processedBuffer;
-    if (!sourceForExport) {
+    const source = getSourceForExport();
+    if (!source) {
       console.error('[Download] No audio buffer available');
       toast({
         title: "Download unavailable",
@@ -386,6 +470,13 @@ export function AudioProcessor({
         variant: "destructive",
       });
       return;
+    }
+
+    let sourceForExport = source;
+    let normalizedTrimRange: TrimRangeSeconds | null = null;
+    if (trimRange) {
+      normalizedTrimRange = normalizeTrimRange(trimRange, source.duration);
+      sourceForExport = trimAudioBuffer(source, normalizedTrimRange);
     }
 
     console.log('[Download] Source buffer:', {
@@ -421,15 +512,19 @@ export function AudioProcessor({
       
       toast({
         title: "Download started",
-        description: "Your MP3 file with current settings is downloading.",
+        description: normalizedTrimRange
+          ? `Trimmed MP3 (${formatTime(normalizedTrimRange.start)} - ${formatTime(normalizedTrimRange.end)}) is downloading.`
+          : "Full MP3 with current settings is downloading.",
       });
 
       if (hasSavedTrack && onSaveTrack) {
         // Keep save/update in the background so the download UI does not stay stuck.
-        void onSaveTrack(audioEngine.settings, sourceForExport).catch((saveError) => {
+        void onSaveTrack(audioEngine.settings, source).catch((saveError) => {
           console.error('[Download] Failed to persist track settings after download:', saveError);
         });
       }
+
+      setShowDownloadDialog(false);
     } catch (error) {
       console.error("[Download] Download render failed:", error);
       console.error("[Download] Error stack:", error instanceof Error ? error.stack : 'No stack trace');
@@ -441,6 +536,15 @@ export function AudioProcessor({
     } finally {
       setIsExporting(false);
     }
+  };
+
+  const handleDownloadConfirm = () => {
+    if (downloadMode === 'trim' && canTrim) {
+      void handleDownload({ start: trimStart, end: trimEnd });
+      return;
+    }
+
+    void handleDownload();
   };
 
   const handleReset = () => {
@@ -684,7 +788,7 @@ export function AudioProcessor({
                   <Button
                     variant="outline"
                     size="lg"
-                    onClick={() => void handleDownload()}
+                    onClick={handleOpenDownloadOptions}
                     className="gap-2 flex-1 sm:flex-initial"
                     disabled={isExporting}
                   >
@@ -697,7 +801,7 @@ export function AudioProcessor({
                     ) : (
                       <>
                         <Download className="w-4 h-4 sm:w-5 sm:h-5" />
-                        MP3
+                        Download
                       </>
                     )}
                   </Button>
@@ -717,12 +821,153 @@ export function AudioProcessor({
             {/* Benefit reminder */}
             <p className="text-center text-xs sm:text-sm text-foreground mt-3 sm:mt-4">
               {user
-                ? 'Signed in: you can download your processed track.'
+                ? 'Signed in: download full songs or trimmed clips.'
                 : 'Sign in to download your processed track.'
               }
             </p>
           </div>
         )}
+
+        {/* Download options */}
+        <Dialog open={showDownloadDialog} onOpenChange={setShowDownloadDialog}>
+          <DialogContent className="sm:max-w-lg" ariaTitle="Download options">
+            <DialogHeader>
+              <DialogTitle>Download options</DialogTitle>
+              <DialogDescription>
+                Download the full song, or trim unnecessary sections and export only what you need.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="space-y-3">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+                <button
+                  type="button"
+                  onClick={() => setDownloadMode('full')}
+                  className={`rounded-xl border p-3 text-left transition-colors ${
+                    downloadMode === 'full'
+                      ? 'border-foreground bg-secondary'
+                      : 'border-border hover:border-foreground/20'
+                  }`}
+                >
+                  <p className="text-sm font-semibold">Full song</p>
+                  <p className="text-xs text-muted-foreground">Export entire track</p>
+                </button>
+                <button
+                  type="button"
+                  onClick={() => canTrim && setDownloadMode('trim')}
+                  disabled={!canTrim}
+                  className={`rounded-xl border p-3 text-left transition-colors ${
+                    downloadMode === 'trim'
+                      ? 'border-foreground bg-secondary'
+                      : 'border-border hover:border-foreground/20'
+                  } ${!canTrim ? 'opacity-60 cursor-not-allowed' : ''}`}
+                >
+                  <p className="text-sm font-semibold flex items-center gap-2">
+                    <Scissors className="w-3.5 h-3.5" />
+                    Trimmed version
+                  </p>
+                  <p className="text-xs text-muted-foreground">Remove parts you do not want</p>
+                </button>
+              </div>
+
+              {downloadMode === 'trim' && canTrim && (
+                <div className="space-y-4 rounded-xl border border-border p-4">
+                  <div className="flex items-center justify-between text-xs sm:text-sm">
+                    <span className="text-muted-foreground">Start</span>
+                    <span className="font-medium">{formatTime(trimStart)}</span>
+                  </div>
+                  <Slider
+                    value={[trimStart]}
+                    min={0}
+                    max={sourceDuration}
+                    step={0.1}
+                    onValueChange={handleTrimStartChange}
+                    disabled={isExporting}
+                  />
+
+                  <div className="flex items-center justify-between text-xs sm:text-sm">
+                    <span className="text-muted-foreground">End</span>
+                    <span className="font-medium">{formatTime(trimEnd)}</span>
+                  </div>
+                  <Slider
+                    value={[trimEnd]}
+                    min={0}
+                    max={sourceDuration}
+                    step={0.1}
+                    onValueChange={handleTrimEndChange}
+                    disabled={isExporting}
+                  />
+
+                  <div className="flex flex-col sm:flex-row gap-2">
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={setTrimStartFromPlayhead}
+                      disabled={isExporting}
+                    >
+                      Set start to playhead
+                    </Button>
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={setTrimEndFromPlayhead}
+                      disabled={isExporting}
+                    >
+                      Set end to playhead
+                    </Button>
+                  </div>
+
+                  <p className="text-xs text-muted-foreground">
+                    Export length: {formatTime(Math.max(0, trimEnd - trimStart))}
+                  </p>
+                </div>
+              )}
+
+              {downloadMode === 'trim' && !canTrim && (
+                <p className="text-xs text-muted-foreground rounded-xl border border-border p-3">
+                  This audio is too short to trim. Use Full song download.
+                </p>
+              )}
+            </div>
+
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setShowDownloadDialog(false)}
+                disabled={isExporting}
+              >
+                Cancel
+              </Button>
+              <Button
+                type="button"
+                variant="neural"
+                onClick={handleDownloadConfirm}
+                disabled={isExporting}
+                className="gap-2"
+              >
+                {isExporting ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Preparing...
+                  </>
+                ) : downloadMode === 'trim' && canTrim ? (
+                  <>
+                    <Scissors className="w-4 h-4" />
+                    Download trimmed MP3
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    Download full MP3
+                  </>
+                )}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
 
         {/* Auth Modal */}
         <AuthModal

@@ -172,23 +172,28 @@ export function PaywallModal({
   const getModalContent = () => {
     if (mode === 'preview-limit') {
       return {
-        title: title || "Unlock Full Audio Access",
-        description: description || "Subscribe to listen to the complete neural-optimized audio and download it.",
+        title: title || "Unlock One-Click Search Conversion",
+        description: description || "Free includes unlimited upload conversions. Pro adds one-click search conversion, full downloads, and trimming.",
       };
     }
     if (mode === 'conversion-limit') {
       return {
-        title: title || "Free Conversion Used",
-        description: description || "You've used your free conversion. Upgrade to Pro for unlimited conversions.",
+        title: title || "Upgrade to Search + Download Pro",
+        description: description || "Keep converting your own uploads for free, or unlock one-click search conversion with Pro.",
       };
     }
     return {
-      title: title || "Unlock Unlimited Neural Optimization",
-      description: description || "Upgrade to Pro for unlimited conversions and full audio access.",
+      title: title || "Upload Free, Search Instantly with Pro",
+      description: description || "Free users can convert unlimited uploaded songs. Pro unlocks one-click search conversion and full download tools.",
     };
   };
 
   const content = getModalContent();
+  const bragHighlights = [
+    "One-click search conversion",
+    "Full + trimmed MP3 downloads",
+    "Same features on every Pro plan",
+  ];
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -199,6 +204,21 @@ export function PaywallModal({
           <div className="absolute inset-0 " />
 
           <div className="relative flex flex-col items-center text-center">
+            <div className="w-full max-w-xl rounded-xl border border-border bg-secondary/40 p-2 sm:p-3 mb-3 sm:mb-4">
+              <p className="text-[11px] sm:text-xs font-semibold uppercase tracking-wide text-foreground">
+                What Pro users brag about
+              </p>
+              <div className="flex flex-wrap justify-center gap-1.5 mt-2">
+                {bragHighlights.map((highlight) => (
+                  <span
+                    key={highlight}
+                    className="text-[10px] sm:text-xs px-2 py-1 rounded-full border border-border bg-background"
+                  >
+                    {highlight}
+                  </span>
+                ))}
+              </div>
+            </div>
             <div className="p-2 sm:p-3 rounded-xl bg-primary mb-2 sm:mb-3">
               <Brain className="w-6 h-6 sm:w-8 sm:h-8 text-white" />
             </div>
@@ -293,16 +313,21 @@ export function PaywallModal({
               </button>
             </div>
 
+            <p className="text-xs sm:text-sm text-muted-foreground mb-4 sm:mb-5">
+              All Pro plans include the same features. Only pricing and billing cycle change.
+            </p>
+
             {/* Features - Updated with new data */}
             <div className="grid grid-cols-2 sm:grid-cols-1 gap-2 sm:gap-3 mb-4 sm:mb-6">
               {[
-                "Unlimited 8D conversions",
+                "Unlimited conversions (upload + search)",
+                "One-click song search and convert",
                 "Full-length audio playback",
+                "Full-song MP3 downloads",
+                "Trim before download",
                 "Advanced beat detection",
                 "Beat-synced panning",
                 "Spatial depth effects",
-                "Bass boost (6dB)",
-                "High-quality WAV downloads",
                 "Priority processing speed",
               ].map((feature, i) => (
                 <div key={i} className="flex items-center gap-2">
@@ -330,8 +355,8 @@ export function PaywallModal({
               ) : (
                 <>
                   <Sparkles className="w-4 h-4 sm:w-5 sm:h-5" />
-                  <span className="hidden sm:inline">Subscribe {selectedPlan === 'lifetime' ? 'Lifetime' : selectedPlan === 'weekly' ? 'Weekly' : 'Yearly'} - {plans[selectedPlan].displayPrice}</span>
-                  <span className="sm:hidden">Get {selectedPlan === 'lifetime' ? 'Lifetime' : selectedPlan === 'weekly' ? 'Weekly' : 'Yearly'} - {plans[selectedPlan].displayPrice}</span>
+                  <span className="hidden sm:inline">Start {selectedPlan === 'lifetime' ? 'Lifetime' : selectedPlan === 'weekly' ? 'Weekly' : 'Yearly'} Pro - {plans[selectedPlan].displayPrice}</span>
+                  <span className="sm:hidden">Get Pro - {plans[selectedPlan].displayPrice}</span>
                 </>
               )}
             </Button>
