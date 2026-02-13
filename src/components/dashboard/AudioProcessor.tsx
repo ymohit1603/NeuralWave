@@ -3,6 +3,7 @@
 import { useState, useEffect, useRef, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
+import { Slider } from "@/components/ui/slider";
 import { Brain, Download, Play, Pause, RotateCcw, X, Lock, Settings2, Loader2, Scissors } from "lucide-react";
 import { processAudio, exportAsMP3, estimateProcessingTime, type UserProfile } from "@/lib/audioProcessor";
 import { renderAudioWithSettings } from "@/lib/audio/exportWithSettings";
@@ -381,8 +382,6 @@ export function AudioProcessor({
   const sourceDuration = sourceForDownload?.duration || 0;
   const canTrim = sourceDuration > MIN_TRIM_DURATION_SECONDS;
   const minTrimDuration = Math.min(MIN_TRIM_DURATION_SECONDS, sourceDuration || MIN_TRIM_DURATION_SECONDS);
-  const trimStartPercent = sourceDuration > 0 ? (trimStart / sourceDuration) * 100 : 0;
-  const trimEndPercent = sourceDuration > 0 ? (trimEnd / sourceDuration) * 100 : 100;
   const trimDuration = Math.max(0, trimEnd - trimStart);
   const canPreviewTrim = canTrim && trimDuration >= minTrimDuration;
 
@@ -445,24 +444,32 @@ export function AudioProcessor({
     }, 20);
   }, [sourceDuration, useRealTimeEngine, audioEngine, isPlaying]);
 
-  const handleTrimStartChange = (value: number) => {
-    if (!sourceDuration) {
+  const handleTrimRangeChange = (values: number[]) => {
+    if (!sourceDuration || values.length < 2) {
       return;
     }
 
-    const rawStart = Math.max(0, Math.min(sourceDuration, value));
-    const maxStart = Math.max(0, trimEnd - minTrimDuration);
-    setTrimStart(Math.min(rawStart, maxStart));
-  };
+    let nextStart = Math.max(0, Math.min(sourceDuration, values[0]));
+    let nextEnd = Math.max(0, Math.min(sourceDuration, values[1]));
 
-  const handleTrimEndChange = (value: number) => {
-    if (!sourceDuration) {
-      return;
+    if (nextStart > nextEnd) {
+      const swapped = nextStart;
+      nextStart = nextEnd;
+      nextEnd = swapped;
     }
 
-    const rawEnd = Math.max(0, Math.min(sourceDuration, value));
-    const minEnd = Math.min(sourceDuration, trimStart + minTrimDuration);
-    setTrimEnd(Math.max(rawEnd, minEnd));
+    const movedStart = Math.abs(nextStart - trimStart) > Math.abs(nextEnd - trimEnd);
+
+    if (nextEnd - nextStart < minTrimDuration) {
+      if (movedStart) {
+        nextStart = Math.max(0, nextEnd - minTrimDuration);
+      } else {
+        nextEnd = Math.min(sourceDuration, nextStart + minTrimDuration);
+      }
+    }
+
+    setTrimStart(nextStart);
+    setTrimEnd(nextEnd);
   };
 
   const setTrimStartFromPlayhead = () => {
@@ -925,7 +932,7 @@ export function AudioProcessor({
 
         {/* Download options */}
         <Dialog open={showDownloadDialog} onOpenChange={setShowDownloadDialog}>
-          <DialogContent className="sm:max-w-lg" ariaTitle="Download options">
+          <DialogContent className="sm:max-w-2xl" ariaTitle="Download options">
             <DialogHeader>
               <DialogTitle>Download options</DialogTitle>
               <DialogDescription>
@@ -983,71 +990,18 @@ export function AudioProcessor({
                     <span className="font-medium">Length: {formatTime(trimDuration)}</span>
                   </div>
 
-                  <div className="relative pt-2 pb-4">
-                    <div className="h-10 rounded-lg border border-border bg-background/80 relative overflow-hidden">
-                      <div className="absolute left-0 right-0 top-1/2 -translate-y-1/2 h-1.5 bg-secondary rounded-full mx-3" />
-                      <div
-                        className="absolute top-1/2 -translate-y-1/2 h-1.5 bg-foreground rounded-full"
-                        style={{
-                          left: `calc(${trimStartPercent}% + 12px)`,
-                          width: `calc(${Math.max(0, trimEndPercent - trimStartPercent)}% - 0px)`,
-                        }}
-                      />
-
-                      <input
-                        type="range"
+                  <div className="relative pt-1 pb-4">
+                    <div className="rounded-lg border border-border bg-background/80 p-3">
+                      <Slider
+                        value={[trimStart, trimEnd]}
                         min={0}
                         max={sourceDuration}
                         step={0.1}
-                        value={trimStart}
-                        onChange={(e) => handleTrimStartChange(parseFloat(e.target.value))}
+                        onValueChange={handleTrimRangeChange}
                         disabled={isExporting}
-                        className="pointer-events-none absolute inset-0 h-10 w-full appearance-none bg-transparent
-                          [&::-webkit-slider-thumb]:pointer-events-auto
-                          [&::-webkit-slider-thumb]:appearance-none
-                          [&::-webkit-slider-thumb]:h-5
-                          [&::-webkit-slider-thumb]:w-5
-                          [&::-webkit-slider-thumb]:rounded-full
-                          [&::-webkit-slider-thumb]:border-2
-                          [&::-webkit-slider-thumb]:border-foreground
-                          [&::-webkit-slider-thumb]:bg-background
-                          [&::-webkit-slider-thumb]:shadow
-                          [&::-moz-range-thumb]:pointer-events-auto
-                          [&::-moz-range-thumb]:h-5
-                          [&::-moz-range-thumb]:w-5
-                          [&::-moz-range-thumb]:rounded-full
-                          [&::-moz-range-thumb]:border-2
-                          [&::-moz-range-thumb]:border-foreground
-                          [&::-moz-range-thumb]:bg-background"
-                      />
-                      <input
-                        type="range"
-                        min={0}
-                        max={sourceDuration}
-                        step={0.1}
-                        value={trimEnd}
-                        onChange={(e) => handleTrimEndChange(parseFloat(e.target.value))}
-                        disabled={isExporting}
-                        className="pointer-events-none absolute inset-0 h-10 w-full appearance-none bg-transparent
-                          [&::-webkit-slider-thumb]:pointer-events-auto
-                          [&::-webkit-slider-thumb]:appearance-none
-                          [&::-webkit-slider-thumb]:h-5
-                          [&::-webkit-slider-thumb]:w-5
-                          [&::-webkit-slider-thumb]:rounded-full
-                          [&::-webkit-slider-thumb]:border-2
-                          [&::-webkit-slider-thumb]:border-foreground
-                          [&::-webkit-slider-thumb]:bg-background
-                          [&::-webkit-slider-thumb]:shadow
-                          [&::-moz-range-thumb]:pointer-events-auto
-                          [&::-moz-range-thumb]:h-5
-                          [&::-moz-range-thumb]:w-5
-                          [&::-moz-range-thumb]:rounded-full
-                          [&::-moz-range-thumb]:border-2
-                          [&::-moz-range-thumb]:border-foreground
-                          [&::-moz-range-thumb]:bg-background"
+                        className="[&_[role=slider]]:h-5 [&_[role=slider]]:w-5 [&_[role=slider]]:border-2 [&_[role=slider]]:border-foreground [&_[role=slider]]:bg-background"
                       />
                     </div>
-
                     <div className="mt-2 flex items-center justify-between text-xs text-muted-foreground">
                       <span>Start {formatTime(trimStart)}</span>
                       <span>End {formatTime(trimEnd)}</span>
@@ -1089,7 +1043,7 @@ export function AudioProcessor({
                     />
                   </div>
 
-                  <div className="flex flex-col sm:flex-row gap-2">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-4 gap-2">
                     <Button
                       type="button"
                       variant={isTrimPreviewActive && isPlaying ? "neural" : "outline"}
